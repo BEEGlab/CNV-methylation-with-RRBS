@@ -1,0 +1,446 @@
+##R script
+### 2a. Evaluates read depth of CNVs AFTER manual verification
+#input files: Samples metadata, visually determined CNV thresholds from script #1, list of CNVs with population information from script #1, CNVnator read depth files estimated from BAM files at each gene, and list of ensembl gene IDs and transcript IDs with UCSC coordinates
+#output files: CNV genotypes per individual, raw, rounded, binary and biallelic, sex-specific CNVs, and gene CNVs (used in script #2b). Figures: read depth clusters, shared upset, and PCA
+
+library(stringr)
+library(plyr)
+library(ggplot2)
+library(reshape)
+library(dplyr)
+library(RColorBrewer)
+
+###############################################################################################################
+###############################################################################################################
+samples<-read.table("Samples96.out",col.names=c("sample","sex","pop"))
+#order
+poporder<-c("LET","BAR","NYN","FAL","KIE","SYL") ###order by increasing PSU when plotting
+sampleorder<-samples$sample[order(match(samples$pop,poporder),samples$sex)]
+samples$sample<-factor(samples$sample,levels=sampleorder)
+
+################ Get Manual annotations ... sets thresholds if not 1.5 and 2.5
+##Format: chrom, start, end, del threshold if not 1.5, dup threshold if not 2.5 :
+#X.Chrom,Start,End,del default 1.5,dup default 2.5,
+#chrI,44000,45500,1.7,4,
+#chrI,848000,887000,,,
+#chrI,1206000,1209000,0.5,,
+#...
+man<-read.csv("CNVsManualThresholds.csv") 
+names(man)[4:5]<-c("delthresh","dupthresh")
+man<-man[,-ncol(man)]##empty column
+man<-man[!is.na(man$Start),]##remove empty rows
+man$delthresh[is.na(man$delthresh)]<-1.5 ##replace NA with threshold for del
+man$dupthresh[is.na(man$dupthresh)]<-2.5 ##replace NA with threshold for dup
+
+################################################################################################################################################################################
+###Use csv files generated in script #1 for manual adjustment
+dels<-"All96.genotypes.deletions.bed.final.table"
+dups<-"All96.genotypes.duplications.bed.final.table"
+
+filtdel<-read.table(paste0(dels,".out"),header=T,sep="\t")
+filtdup<-read.table(paste0(dups,".out"),header=T,sep="\t")
+##only keep if manually verified
+filtdel<-merge(filtdel,man,sort=F)
+filtdup<-merge(filtdup,man,sort=F)
+filtcnv<-rbind(filtdel,filtdup)
+
+################################################################################################
+################################################################################################
+###Go through thresholds and assign them, based on thresholds from manual verification!!
+### Adjust based on manual modification
+roundfiltdel<-filtdel
+roundfiltdup<-filtdup
+CNfiltdel<-filtdel
+CNfiltdup<-filtdup
+
+## del vs dup vs noncnv
+roundfiltdel[roundfiltdel<roundfiltdel$delthresh] <- 0
+roundfiltdel[roundfiltdel>roundfiltdel$dupthresh] <- 9 ##set to very high since reassigning entire dataset
+roundfiltdel[roundfiltdel>=roundfiltdel$delthresh & roundfiltdel<=roundfiltdel$dupthresh] <- 1
+roundfiltdel[roundfiltdel==9] <- 2 ##reset to 2
+
+roundfiltdup[roundfiltdup<roundfiltdup$delthresh] <- 0
+roundfiltdup[roundfiltdup>roundfiltdup$dupthresh] <- 9
+roundfiltdup[roundfiltdup>=roundfiltdup$delthresh & roundfiltdup<=roundfiltdup$dupthresh] <- 1
+roundfiltdup[roundfiltdup==9] <- 2 ##reset to 2
+
+## CN after rounding, het vs hom estimates
+CNfiltdel[CNfiltdel<CNfiltdel$delthresh/2] <- 0 ##hom del
+CNfiltdel[CNfiltdel>0 & CNfiltdel<CNfiltdel$delthresh] <- 0.1 ##het del?
+CNfiltdel[CNfiltdel>(CNfiltdel$dupthresh*1.75)] <- 100 ## >2 duplications
+CNfiltdel[CNfiltdel<90 & CNfiltdel>CNfiltdel$dupthresh+1] <- 95 ##hom dup?
+CNfiltdel[CNfiltdel<90 & CNfiltdel>CNfiltdel$dupthresh] <- 90 ##het dup?
+CNfiltdel[CNfiltdel<90 & CNfiltdel>0.1] <- 1 ## no CNV
+CNfiltdel[CNfiltdel==0.1] <- 0.5 ## het del
+CNfiltdel[CNfiltdel==90] <- 1.5 ## het dup
+CNfiltdel[CNfiltdel==95] <- 2 ## hom dup
+CNfiltdel[CNfiltdel==100] <- 3 ## more dup
+
+CNfiltdup[CNfiltdup<CNfiltdup$delthresh/2] <- 0 ##hom del
+CNfiltdup[CNfiltdup>0 & CNfiltdup<CNfiltdup$delthresh] <- 0.1 ##het del?
+CNfiltdup[CNfiltdup>CNfiltdup$dupthresh*1.75] <- 100 ##more than 1 dup
+CNfiltdup[CNfiltdup<90 & CNfiltdup>CNfiltdup$dupthresh+1] <- 95 ##hom dup?
+CNfiltdup[CNfiltdup<90 & CNfiltdup>CNfiltdup$dupthresh] <- 90 ##het dup?
+CNfiltdup[CNfiltdup<90 & CNfiltdup>0.1] <- 1 ## no CNV
+CNfiltdup[CNfiltdup==0.1] <- 0.5 ## het del
+CNfiltdup[CNfiltdup==90] <- 1.5 ## het dup
+CNfiltdup[CNfiltdup==95] <- 2 ## hom dup
+CNfiltdup[CNfiltdup==100] <- 3 ## more dup
+####################################################################################################
+##Make tables complete again
+roundfiltdel[c(1:3,100:ncol(roundfiltdel))]<-filtdel[c(1:3,100:ncol(filtdel))]
+roundfiltdup[c(1:3,100:ncol(roundfiltdup))]<-filtdup[c(1:3,100:ncol(filtdup))]
+CNfiltdel[c(1:3,100:ncol(CNfiltdel))]<-filtdel[c(1:3,100:ncol(filtdel))]
+CNfiltdup[c(1:3,100:ncol(CNfiltdup))]<-filtdup[c(1:3,100:ncol(filtdup))]
+
+##Fix last columns
+filtdel<-filtdel[,c(1:103,110:123)]
+filtdup<-filtdup[,c(1:103,110:123)]
+CNfiltdel<-CNfiltdel[,c(1:103,110:123)]
+CNfiltdup<-CNfiltdup[,c(1:103,110:123)]
+
+##recalculate
+CNfiltdel$ndel<-as.vector(colSums(apply(CNfiltdel[,4:99], 1, function(x) x<1)))
+CNfiltdel$ndup<-as.vector(colSums(apply(CNfiltdel[,4:99], 1, function(x) x>1)))
+CNfiltdup$ndel<-as.vector(colSums(apply(CNfiltdup[,4:99], 1, function(x) x<1)))
+CNfiltdup$ndup<-as.vector(colSums(apply(CNfiltdup[,4:99], 1, function(x) x>1)))
+#which indivs have deletions and duplications?
+CNfiltdel$deletions<-as.vector((apply(CNfiltdel[,4:99], 1, function(x) paste(names(which(x < 1)),collapse=","))))
+CNfiltdel$duplications<-as.vector((apply(CNfiltdel[,4:99], 1, function(x) paste(names(which(x > 1)),collapse=","))))
+CNfiltdup$deletions<-as.vector((apply(CNfiltdup[,4:99], 1, function(x) paste(names(which(x < 1)),collapse=","))))
+CNfiltdup$duplications<-as.vector((apply(CNfiltdup[,4:99], 1, function(x) paste(names(which(x > 1)),collapse=","))))
+##### Add Population Del / Dup numbers
+for(deldup in c("del","dup")){
+  for(po in sort(unique(samples$pop))){
+    ##how many of each pop in table are deletions
+    if(deldup=="del"){
+      CNfiltdel[,paste0(po,"del")]<-as.vector(colSums(apply(CNfiltdel[,names(CNfiltdel) %in% samples$sample[samples$pop==po]], 1, function(x) x<1)))
+      CNfiltdup[,paste0(po,"del")]<-as.vector(colSums(apply(CNfiltdup[,names(CNfiltdup) %in% samples$sample[samples$pop==po]], 1, function(x) x<1)))
+    }
+    ##how many of each pop in table are duplications
+    if(deldup=="dup"){
+      CNfiltdel[,paste0(po,"dup")]<-as.vector(colSums(apply(CNfiltdel[,names(CNfiltdel) %in% samples$sample[samples$pop==po]], 1, function(x) x>1)))
+      CNfiltdup[,paste0(po,"dup")]<-as.vector(colSums(apply(CNfiltdup[,names(CNfiltdup) %in% samples$sample[samples$pop==po]], 1, function(x) x>1)))
+    }
+  }
+}
+##copy over to read depth dataset
+filtdel[100:117]<-CNfiltdel[100:117]
+filtdup[100:117]<-CNfiltdup[100:117]
+
+################################################################################
+## DEL and DUP including BOTH
+alldeletions<-rbind(filtdel[filtdel$ndel>0,],filtdup[filtdup$ndel>0,])
+allduplications<-rbind(filtdel[filtdel$ndup>0,],filtdup[filtdup$ndup>0,])
+write.csv(alldeletions,"CNVs.genotypes.deletions.csv",row.names=F)
+write.csv(allduplications,"CNVs.genotypes.duplications.csv",row.names=F)
+write.csv(rbind(filtdel,filtdup),"CNVs.genotypes.combined.csv",row.names=F)
+
+alldeletionsCN<-rbind(CNfiltdel[CNfiltdel$ndel>0,],CNfiltdup[CNfiltdup$ndel>0,])
+allduplicationsCN<-rbind(CNfiltdel[CNfiltdel$ndup>0,],CNfiltdup[CNfiltdup$ndup>0,])
+write.csv(alldeletionsCN,"CNVs.genotypes.deletions.CN.csv",row.names=F)
+write.csv(allduplicationsCN,"CNVs.genotypes.duplications.CN.csv",row.names=F)
+write.csv(rbind(CNfiltdel,CNfiltdup),"CNVs.genotypes.combined.CN.csv",row.names=F)
+
+## DEL and DUP and BOTH
+combined<-rbind(cbind(filtdel[filtdel$ndel>0 & filtdel$ndup>0,1:3],cnv="both"),
+                cbind(filtdel[filtdel$ndel>0 & filtdel$ndup==0,1:3],cnv="del"),
+                cbind(filtdel[filtdel$ndel==0 & filtdel$ndup>0,1:3],cnv="dup"),
+                cbind(filtdup[filtdup$ndel>0 & filtdup$ndup>0,1:3],cnv="both"),
+                cbind(filtdup[filtdup$ndel>0 & filtdup$ndup==0,1:3],cnv="del"),
+                cbind(filtdup[filtdup$ndel==0 & filtdup$ndup>0,1:3],cnv="dup"))
+combined$length<-combined$End-combined$Start
+write.table(combined,"CNVs.genotypes.bed",row.names=F,sep="\t",quote=F,col.names=F)
+
+################################################################################
+################################################################################
+## Read Depth Figures
+
+##### Consistent manual color scheme for read depth based on clusters / CN
+myColors <- brewer.pal(11,"RdBu")
+myColors<-myColors[c(2,4,6,8,10,11)]
+myColors[3]<-"#bfbdbd" ##middle is too light, make it dark gray
+names(myColors) <- c(0,0.5,1,1.5,2,3)
+colScale <- scale_colour_manual(name = "depth",values = myColors)
+#####
+
+#for(CNVfile in c("CNVs.genotypes.deletions","CNVs.genotypes.duplications")){
+for(CNVfile in "CNVs.genotypes.combined"){
+  clus<-read.csv(paste0(CNVfile,".CN.csv")) ##read in CN to assign clusters
+  cnvs<-read.csv(paste0(CNVfile,".csv"))
+  
+  ### Takes in all CNV genotyping (copy-number) results and combines them
+  for (row in 1:nrow(cnvs)){
+    cluster<-t(clus[row,order(samples$sample)+3]) ##resort by population and sex
+    line<-t(cnvs[row,order(samples$sample)+3]) ##resort by population and sex
+    if(clus[row,]$ndel>0 & clus[row,]$ndup>0){
+      cnvtype<-"both"
+    }else if(clus[row,]$ndel>0 & clus[row,]$ndup==0){
+      cnvtype<-"del"
+    }else if(clus[row,]$ndel==0 & clus[row,]$ndup>0){
+      cnvtype<-"dup"
+    }
+    
+    cnvplot<-as.data.frame(cbind(sample=row.names(line),rd=line[,1],clus=cluster[,1],pop=samples$pop[order(samples$sample)]))
+    cnvplot$rd<-as.numeric(cnvplot$rd)
+    cnvplot<-merge(cnvplot,samples,sort=F) ##adds sex
+    cnvplot$pop<-factor(cnvplot$pop,levels=unique(cnvplot$pop)) ##make factor for plotting
+      
+    ggplot(cnvplot,aes(sample,rd)) +
+          geom_point(size=2,aes(shape = factor(sex),col=clus)) +
+          colScale +
+          facet_grid(~pop,scale="free") +
+          ylab("read depth") + xlab("sample") +
+          ylim(0,max(cnvplot$rd)) +
+          theme_light(base_size = 16) +
+          ggtitle(paste(cnvs[row,1],cnvs[row,2],cnvs[row,3],cnvtype)) +
+          theme(axis.text.x = element_text(angle = 90, size = 5),legend.position = "",
+                panel.spacing.x=unit(0.2,"lines"))
+    ggsave(paste("Figures_Post/Depth",cnvs[row,1],cnvs[row,2],cnvs[row,3],cnvtype,"clusters.pdf",sep="."),width=6)
+  }      
+}
+
+################################################################################
+################################################################################
+
+############# Sex-specific, based on differences between Males vs Females (diff. in means?)
+for(deldup in c("del","dup")){
+  for(po in sort(unique(samples$sex))){
+    ##how many of each sex in table are deletions
+    if(deldup=="del"){
+      CNfiltdel[,paste0(po,"del")]<-as.vector(colSums(apply(CNfiltdel[,names(CNfiltdel) %in% samples$sample[samples$sex==po]], 1, function(x) x<1)))
+      CNfiltdup[,paste0(po,"del")]<-as.vector(colSums(apply(CNfiltdup[,names(CNfiltdup) %in% samples$sample[samples$sex==po]], 1, function(x) x<1)))
+    }
+    ##how many of each sex in table are duplications
+    if(deldup=="dup"){
+      CNfiltdel[,paste0(po,"dup")]<-as.vector(colSums(apply(CNfiltdel[,names(CNfiltdel) %in% samples$sample[samples$sex==po]], 1, function(x) x>1)))
+      CNfiltdup[,paste0(po,"dup")]<-as.vector(colSums(apply(CNfiltdup[,names(CNfiltdup) %in% samples$sample[samples$sex==po]], 1, function(x) x>1)))
+    }
+  }
+}
+CNfiltdel$fm<-CNfiltdel$femaledel-CNfiltdel$maledel
+CNfiltdel$fmdup<-CNfiltdel$femaledup-CNfiltdel$maledup
+CNfiltdup$fm<-CNfiltdup$femaledup-CNfiltdup$maledup
+CNfiltdup$fmdel<-CNfiltdup$femaledel-CNfiltdup$maledel
+
+##Sex specific CNVs?:
+SexSpecific<-CNfiltdel[CNfiltdel$fm<(-40),1:99]
+SexSpecific<-rbind(SexSpecific,CNfiltdel[(CNfiltdel$fmdup)<(-40),1:99])
+SexSpecific<-rbind(SexSpecific,CNfiltdel[(CNfiltdel$fm)>40,1:99])
+SexSpecific<-rbind(SexSpecific,CNfiltdup[(CNfiltdup$fm)<(-40),1:99])
+SexSpecific<-rbind(SexSpecific,CNfiltdup[(CNfiltdup$fmdel)<(-40),1:99])
+write.csv(SexSpecific,"SexSpecificCNVs.csv")
+
+
+#################################################################################
+#################################################################################
+###### get bi-allelic sites and info from CN
+for(CNVfile in c("CNVs.genotypes.deletions.CN","CNVs.genotypes.duplications.CN","CNVs.genotypes.combined.CN")){
+  bi<-read.csv(paste0(CNVfile,".csv"))
+  #bi<-bi[apply(bi[,4:99], 1, function(x) n_distinct(x))<4,] ##only 3 genotypes
+  bi$gens<-paste(apply(bi[,4:99], 1, function(x) as.vector(sort(unique(x)))))
+  #as.data.frame(table(bi$gens)) 
+  bi<-bi[bi$gens %in% c("c(0, 0.5, 1)","c(0, 1)","c(0.5, 1, 1.5)","c(0.5, 1)","c(1, 1.5)",
+                    "c(1, 1.5, 2)","c(1, 2)"),]
+  write.csv(file=paste0(CNVfile,".biallelic.csv"),bi,row.names=F)
+}
+#################################################################################
+################################################################################
+##### Summarize number of CNVs per individual and per population
+ct<-read.csv("CNVs.genotypes.deletions.CN.csv")
+ct<-anti_join(ct,SexSpecificCNVs[,1:3])
+cts<-ct[,4:99] 
+cts[cts<1] <- 100 ##Del
+cts[cts<100] <- 0 ##Not Del
+cts[cts==100] <- 1 ##Del
+ct[,4:99]<-cts
+ctdel<-as.data.frame(apply(ct[,c(4:99,104:115)],2,function(x) sum(x > 0)))
+names(ctdel)[1]<-"deletions"
+
+ct<-read.csv("CNVs.genotypes.duplications.CN.csv")
+ct<-anti_join(ct,SexSpecificCNVs[,1:3])
+cts<-ct[,4:99] 
+cts[cts<=1] <- 0 ##Not Dup
+cts[cts>1] <- 1 ##Dup
+ct[,4:99]<-cts
+ctdup<-as.data.frame(apply(ct[,c(4:99,104:115)],2,function(x) sum(x > 0)))
+names(ctdup)[1]<-"duplications"
+write.csv(cbind(ctdel,ctdup),"CNVs.per.sample.csv")
+
+#################################################################################
+######### PLOT overlap of CNVs among POPS #######################################
+#################################################################################
+library("UpSetR")
+
+###Determine which populations have DEL and DUP for each CNV
+#DEL binary: 0=del
+#DUP binary: 1=dup
+
+###### get info from final list above
+binaryfiltdel<-read.csv("CNVs.genotypes.deletions.CN.csv")
+binaryfiltdup<-read.csv("CNVs.genotypes.duplications.CN.csv")
+binaryfiltdel_orig<-binaryfiltdel
+binaryfiltdup_orig<-binaryfiltdup
+################################################################################
+
+## del vs not, or dup vs not
+binaryfiltdel[binaryfiltdel<1] <- 0 ##Del
+binaryfiltdel[binaryfiltdel>=1] <- 1 ##Not Del
+binaryfiltdup[binaryfiltdup>1] <- 9 ##Dup
+binaryfiltdup[binaryfiltdup<=2] <- 0 ##Not Dup
+binaryfiltdup[binaryfiltdup==9] <- 1  ##reset Dup to 1
+
+binaryfiltdel[c(1:3,100:ncol(binaryfiltdel))]<-binaryfiltdel_orig[c(1:3,100:ncol(binaryfiltdel_orig))]
+binaryfiltdup[c(1:3,100:ncol(binaryfiltdup))]<-binaryfiltdup_orig[c(1:3,100:ncol(binaryfiltdup_orig))]
+
+###### now populations
+pops<-poporder
+
+popCNVs<-binaryfiltdel
+popCNVs$pop1<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[1])+3],1,sum)
+popCNVs$pop2<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[2])+3],1,sum)
+popCNVs$pop3<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[3])+3],1,sum)
+popCNVs$pop4<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[4])+3],1,sum)
+popCNVs$pop5<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[5])+3],1,sum)
+popCNVs$pop6<-16-apply(binaryfiltdel[,which(samples$pop %in% pops[6])+3],1,sum)
+names(popCNVs)[(ncol(popCNVs)-5):ncol(popCNVs)]<-pops
+
+popCNVs2<-binaryfiltdup
+popCNVs2$pop1<-apply(binaryfiltdup[,which(samples$pop %in% pops[1])+3],1,sum)
+popCNVs2$pop2<-apply(binaryfiltdup[,which(samples$pop %in% pops[2])+3],1,sum)
+popCNVs2$pop3<-apply(binaryfiltdup[,which(samples$pop %in% pops[3])+3],1,sum)
+popCNVs2$pop4<-apply(binaryfiltdup[,which(samples$pop %in% pops[4])+3],1,sum)
+popCNVs2$pop5<-apply(binaryfiltdup[,which(samples$pop %in% pops[5])+3],1,sum)
+popCNVs2$pop6<-apply(binaryfiltdup[,which(samples$pop %in% pops[6])+3],1,sum)
+names(popCNVs2)[(ncol(popCNVs2)-5):ncol(popCNVs2)]<-pops
+
+###Found in every population
+nrow(popCNVs[popCNVs$FAL>0 & popCNVs$KIE>0 & popCNVs$NYN>0 & popCNVs$BAR>0 & popCNVs$SYL>0 & popCNVs$LET>0,])
+nrow(popCNVs2[popCNVs2$FAL>0 & popCNVs2$KIE>0 & popCNVs2$NYN>0 & popCNVs2$BAR>0 & popCNVs2$SYL>0 & popCNVs2$LET>0,])
+nrow(popCNVs[popCNVs$FAL>4 & popCNVs$KIE>4 & popCNVs$NYN>4 & popCNVs$BAR>4 & popCNVs$SYL>4 & popCNVs$LET>4,])
+nrow(popCNVs2[popCNVs2$FAL>4 & popCNVs2$KIE>4 & popCNVs2$NYN>4 & popCNVs2$BAR>4 & popCNVs2$SYL>4 & popCNVs2$LET>4,])
+
+##with sex-specific
+write.csv(popCNVs,"CNVs.binary.deletions.csv",row.names=F)
+write.csv(popCNVs2,"CNVs.binary.duplications.csv",row.names=F)
+write.csv(rbind(cbind(popCNVs,cnv="del"),cbind(popCNVs2,cnv="dup")),"CNVs.binary.combined.csv",row.names=F)
+
+###PLOT
+#first remove sex specific
+popCNVs<-anti_join(popCNVs,SexSpecificCNVs[,1:3])
+popCNVs2<-anti_join(popCNVs2,SexSpecificCNVs[,1:3])
+
+par(oma=c(6,2,2,2),mar=c(2,2,2,2))
+pdf("SharedCNVs.pdf",width=10)
+
+###DELs
+upst<-popCNVs[,(ncol(popCNVs)-5):ncol(popCNVs)]
+upst[upst>0]<-1 ##binary, has CNV or not
+(upset(upst, order.by = c("freq"),sets.bar.color ="red",shade.color="red",sets=rev(c("SYL","KIE","FAL","NYN","BAR","LET")),keep.order=T,nsets=length(pops),set_size.show=T,mainbar.y.label=paste("DEL")))
+
+###DUPs
+upst<-popCNVs2[,(ncol(popCNVs2)-5):ncol(popCNVs2)]
+upst[upst>0]<-1 ##binary, has CNV or not
+(upset(upst, order.by = c("freq"),sets.bar.color ="blue",shade.color="blue",sets=rev(c("SYL","KIE","FAL","NYN","BAR","LET")),keep.order=T,nsets=length(pops),set_size.show=T,mainbar.y.label=paste("DUP")))
+
+dev.off()
+
+################################################################################################
+################################################################################################
+################################ PCA AFTER manual fixing  ################################################
+
+#for(CNVfile in c("CNVs.genotypes.deletions.CN.csv","CNVs.genotypes.duplications.CN.csv","CNVs.genotypes.combined.CN.csv","CNVs.binary.deletions.csv","CNVs.binary.duplications.csv","CNVs.binary.combined.csv","CNVs.genotypes.deletions.CN.biallelic.csv","CNVs.genotypes.duplications.CN.biallelic.csv","CNVs.genotypes.combined.CN.biallelic.csv")){
+for(CNVfile in c("CNVs.binary.deletions.csv","CNVs.binary.duplications.csv")){
+  filt<-read.csv(CNVfile)
+  
+  popsorder<-as.data.frame(samples$pop)
+  row.names(popsorder)<-colnames(filt[,4:99])
+  colnames(popsorder)<-"pop"
+  popsorder$pop<-factor(popsorder$pop,levels=poporder)
+  
+  #remove Sex Specific
+  filt_nosex<-anti_join(filt,SexSpecificCNVs[,1:3])
+  
+  pca1 <- prcomp(t((filt_nosex[,4:99])))
+  varx<-as.matrix((pca1$sdev)^2 / sum(pca1$sdev^2))[1]
+  vary<-as.matrix((pca1$sdev)^2 / sum(pca1$sdev^2))[2]
+  plotpca<-as.data.frame(cbind(pca1$x,popsorder))
+  ggplot(plotpca,aes(PC1,PC2))+
+    geom_point(aes(color = pop),size=3,alpha=0.25) +
+    geom_text(aes(label=rownames(plotpca),color=pop,), size=3,
+              nudge_y = 0.05,
+              check_overlap = T) +
+    xlab(paste("PC1 (",as.integer(varx*100),"%)")) +
+    ylab(paste("PC2 (",as.integer(vary*100),"%)")) +
+    theme_light(base_size = 16) +
+    theme(panel.grid.minor.x = element_blank(),panel.grid.minor.y = element_blank(),
+          panel.grid.major.x = element_blank(),panel.grid.major.y = element_blank())
+  ggsave(paste0(CNVfile,".PCA.pdf"))
+}
+
+####################################################################################################
+####################################################################################################
+####################################################################################################
+
+##Add gene data
+genesIDs<-read.table("Genes.UCSC.ensembl.transcripts.out",header=T)
+genesIDs<-genesIDs[,c(1:5,17:20)]
+##only Genes, collapse info, get largest region
+genesGIDs<-aggregate(.~Gene,genesIDs[,c(2,4)],min)
+genesGIDs2<-aggregate(.~Gene,genesIDs[,c(3,4)],max)
+genesGIDs<-merge(genesGIDs,genesGIDs2)
+genesGIDs<-merge(genesGIDs,unique(genesIDs[,c(1,4,6:9)]))
+genesGIDs<-genesGIDs[,c(4,2,3,1,5:8)]
+
+########################################################################
+##CNVnator read depth per gene!! 
+gene_rd<-read.delim("All96.genotypes.genes.bed",header=T,sep="\t",comment.char="")
+gene_rd[,5:100]<-as.data.frame(sapply(gene_rd[,5:100], as.numeric))
+gene_rd$GeneID<-sapply(strsplit(gene_rd$GeneID,"\\."),`[`,1)
+gene_rd<-merge(gene_rd,genesIDs)
+gene_rd<-aggregate(.~Gene,gene_rd[,c(5:100,104)],mean) ##average per gene in case multiple transcripts
+genes<-merge(gene_rd,unique(genesGIDs[,c(1:4,7:8)]))##re-add annotations
+
+########################################################################
+###GENE CNVs (overlapping CNVs)
+system("cat Genome/Genes.UCSC.ensembl.out | sed 1,1d | sortBed -i - | cut -f 1-4,18,19 | intersectBed -a CNVs.genotypes.bed -b stdin -wao > CNVs.genes.bed",intern=F)
+genecnvs<-read.delim("CNVs.genes.bed",header=F,sep="\t",comment.char="")
+names(genecnvs)<-c("chrom_cnv","start_cnv","end_cnv","cnv","length_cnv","chrom_gene","start_gene","end_gene","Gene","cat","biotype","overlap")
+genecnvs$length_gene<-genecnvs$end_gene-genecnvs$start_gene
+genecnvs$prop<-genecnvs$overlap/genecnvs$length_gene
+genecnvs<-genecnvs[order(-genecnvs$prop),]##order by proportion overlap
+
+##remove sex-specific
+renamesex<-SexSpecificCNVs[,1:3]
+names(renamesex)<-c("chrom_cnv","start_cnv","end_cnv")
+genecnvs<-anti_join(genecnvs,renamesex)
+
+###merge with CNVs overlapping genes
+allgenes_cov<-merge(gene_rd,allgenes[,!names(genecnvs) %in% c("cat","biotype")],by="Gene")
+
+################################################################################################################################################################################
+################################################################################################################################################################################
+## Check relative depth to match expectations from entire CNVs
+##add thresholds from CNVs
+gcnvdel<-merge(allgenes_cov,filtdel[,c(1:3,116:117)],by.x=c("chrom_cnv","start_cnv","end_cnv"),by.y=c("X.Chrom","Start","End"))
+gcnvdup<-merge(allgenes_cov,filtdup[,c(1:3,116:117)],by.x=c("chrom_cnv","start_cnv","end_cnv"),by.y=c("X.Chrom","Start","End"))
+gcnv<-rbind(gcnvdel,gcnvdup)
+
+############### Add columns for analysis
+list=c(5:100)#columns with read depth
+gcnv$min<-apply(gcnv[,list],1,min)
+gcnv$max<-apply(gcnv[,list],1,max)
+gcnv$diff<-gcnv$max-gcnv$min ##max-min
+pairwisediff<-function(x){
+  rank=sort(x)
+  diff=max(diff(as.numeric(rank)))
+  return(diff)
+}
+gcnv$adiff<-apply(gcnv[,list],1,function(x) pairwisediff(x)) ##largest difference between 2 indivs
+############### Filter based on thresholds
+dthreshold=0.45 ##this is the spread - there should be at least 1 gap between two individuals that span 0.5x coverage
+delthreshold=1.5
+dupthreshold=2.5
+filt<-gcnv[gcnv$max>delthreshold & gcnv$min<dupthreshold & gcnv$diff>1 & gcnv$adiff>dthreshold,]
+
+write.csv(filt,"CNVs.genes.filtered.csv",row.names=F) ##original, all chromosomes including XIX

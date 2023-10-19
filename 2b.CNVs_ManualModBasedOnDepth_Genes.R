@@ -1,0 +1,283 @@
+##R script
+### 2b. Evaluates read depth of Gene CNVs AFTER manual verification
+#input files: Samples metadata, visually determined CNV thresholds from script #1, list of CNVs and CNV genes with population information from script #1.
+#output files: CNV genotypes per individual, raw, rounded, and biallelic. Figures: read depth clusters, and CNV frequencies.
+
+library(stringr)
+library(plyr)
+library(ggplot2)
+library(reshape)
+library(dplyr)
+library(RColorBrewer)
+
+###############################################################################################################
+###############################################################################################################
+samples<-read.table("Samples96.out",col.names=c("sample","sex","pop"))
+#order
+poporder<-c("LET","BAR","NYN","FAL","KIE","SYL") ###order by increasing PSU when plotting
+sampleorder<-samples$sample[order(match(samples$pop,poporder),samples$sex)]
+samples$sample<-factor(samples$sample,levels=sampleorder)
+
+################ Get Manual annotations ... sets thresholds if not 1.5 and 2.5
+man<-read.csv("CNVs.genes.modthresholds.csv")  
+man<-man[,c(2:109,116:117)]
+names(man)[109:110]<-c("delthresh","dupthresh")
+man<-man[!is.na(man$delthresh),]##remove empty rows
+
+################################################################################################################################################################################
+################################################################################################
+################################################################################################
+###Go through thresholds and assign them, based on thresholds from manual verification!!
+### Adjust based on manual modification
+roundg<-man
+CNfiltg<-man
+
+## del vs dup vs noncnv
+roundg[roundg<roundg$delthresh] <- 0
+roundg[roundg>roundg$dupthresh] <- 9 ##set to very high since reassigning entire dataset
+roundg[roundg>=roundg$delthresh & roundg<=roundg$dupthresh] <- 1
+roundg[roundg==9] <- 2 ##reset to 2
+
+## CN after rounding, het vs hom estimates
+CNfiltg[CNfiltg<CNfiltg$delthresh/2] <- 0 ##hom del
+CNfiltg[CNfiltg>0 & CNfiltg<CNfiltg$delthresh] <- 0.1 ##het del?
+CNfiltg[CNfiltg>(CNfiltg$CNfiltg*1.75)] <- 100 ## >2 duplications
+CNfiltg[CNfiltg<90 & CNfiltg>CNfiltg$dupthresh+1] <- 95 ##hom dup?
+CNfiltg[CNfiltg<90 & CNfiltg>CNfiltg$dupthresh] <- 90 ##het dup?
+CNfiltg[CNfiltg<90 & CNfiltg>0.1] <- 1 ## no CNV
+CNfiltg[CNfiltg==0.1] <- 0.5 ## het del
+CNfiltg[CNfiltg==90] <- 1.5 ## het dup
+CNfiltg[CNfiltg==95] <- 2 ## hom dup
+CNfiltg[CNfiltg==100] <- 3 ## more dup
+####################################################################################################
+##Make tables complete again
+roundg[c(1:4,101:ncol(roundg))]<-man[c(1:4,101:ncol(man))]
+CNfiltg[c(1:4,101:ncol(CNfiltg))]<-man[c(1:4,101:ncol(man))]
+
+##calculate
+CNfiltg$ndel<-as.vector(colSums(apply(CNfiltg[,5:100], 1, function(x) x<1)))
+CNfiltg$ndup<-as.vector(colSums(apply(CNfiltg[,5:100], 1, function(x) x>1)))
+#which indivs have deletions and duplications?
+CNfiltg$deletions<-as.vector((apply(CNfiltg[,5:100], 1, function(x) paste(names(which(x < 1)),collapse=","))))
+CNfiltg$duplications<-as.vector((apply(CNfiltg[,5:100], 1, function(x) paste(names(which(x > 1)),collapse=","))))
+##### Add Population Del / Dup numbers
+for(deldup in c("del","dup")){
+  for(po in sort(unique(samples$pop))){
+    ##how many of each pop in table are deletions
+    if(deldup=="del"){
+      CNfiltg[,paste0(po,"del")]<-as.vector(colSums(apply(CNfiltg[,names(CNfiltg) %in% samples$sample[samples$pop==po]], 1, function(x) x<1)))
+    }
+    ##how many of each pop in table are duplications
+    if(deldup=="dup"){
+      CNfiltg[,paste0(po,"dup")]<-as.vector(colSums(apply(CNfiltg[,names(CNfiltg) %in% samples$sample[samples$pop==po]], 1, function(x) x>1)))
+    }
+  }
+}
+##copy over to read depth dataset
+man[111:126]<-CNfiltg[111:126]
+roundg[111:126]<-CNfiltg[111:126]
+
+################################################################################
+alldeletions<-man[man$ndel>0,]
+allduplications<-man[man$ndup>0,]
+
+write.csv(alldeletions,"CNVs.genes.deletions.csv",row.names=F)
+write.csv(allduplications,"CNVs.genes.duplications.csv",row.names=F)
+write.csv(man,"CNVs.genes.combined.csv",row.names=F)
+
+alldeletionsCN<-CNfiltg[CNfiltg$ndel>0,]
+allduplicationsCN<-CNfiltg[CNfiltg$ndup>0,]
+write.csv(alldeletionsCN,"CNVs.genes.deletions.CN.csv",row.names=F)
+write.csv(allduplicationsCN,"CNVs.genes.duplications.CN.csv",row.names=F)
+write.csv(CNfiltg,"CNVs.genes.combined.CN.csv",row.names=F)
+
+#################################################################################
+#################################################################################
+###### get bi-allelic sites and info from CN
+  bi<-CNfiltg
+  bi$gens<-paste(apply(bi[,5:100], 1, function(x) as.vector(sort(unique(x)))))
+  #as.data.frame(table(bi$gens)) 
+  bi<-bi[bi$gens %in% c("c(0, 0.5, 1)","c(0, 1)","c(0.5, 1, 1.5)","c(0.5, 1)","c(1, 1.5)",
+                        "c(1, 1.5, 2)","c(1, 2)"),]
+  write.csv(bi,"CNVs.genes.combined.CN.biallelic.csv",row.names=F)
+  
+################################################################################
+################################################################################
+## Read Depth Figures
+
+##### Consistent manual color scheme for read depth based on clusters / CN
+myColors <- brewer.pal(11,"RdBu")
+myColors<-myColors[c(2,4,6,8,10,11)]
+myColors[3]<-"#bfbdbd" ##middle is too light, make it dark gray
+names(myColors) <- c(0,0.5,1,1.5,2,3)
+colScale <- scale_colour_manual(name = "depth",values = myColors)
+#####
+
+for(CNVfile in "CNVs.genes.combined"){
+  clus<-read.csv(paste0(CNVfile,".CN.csv")) ##read in CN to assign clusters
+  cnvs<-read.csv(paste0(CNVfile,".csv"))
+  
+  ### Takes in all CNV genotyping (copy-number) results and combines them
+  for (row in 1:nrow(cnvs)){
+    cluster<-t(clus[row,order(samples$sample)+4]) ##resort by population and sex
+    line<-t(cnvs[row,order(samples$sample)+4]) ##resort by population and sex
+    if(clus[row,]$ndel>0 & clus[row,]$ndup>0){
+      cnvtype<-"both"
+    }else if(clus[row,]$ndel>0 & clus[row,]$ndup==0){
+      cnvtype<-"del"
+    }else if(clus[row,]$ndel==0 & clus[row,]$ndup>0){
+      cnvtype<-"dup"
+    }
+    
+    cnvplot<-as.data.frame(cbind(sample=row.names(line),rd=line[,1],clus=cluster[,1],pop=samples$pop[order(samples$sample)]))
+    cnvplot$rd<-as.numeric(cnvplot$rd)
+    cnvplot<-merge(cnvplot,samples,sort=F) ##adds sex
+    cnvplot$pop<-factor(cnvplot$pop,levels=unique(cnvplot$pop)) ##make factor for plotting
+      
+    ggplot(cnvplot,aes(sample,rd)) +
+          geom_point(size=2,aes(shape = factor(sex),col=clus)) +
+          colScale +
+          facet_grid(~pop,scale="free") +
+          ylab("read depth") + xlab("sample") +
+          ylim(0,max(cnvplot$rd)) +
+          theme_light(base_size = 16) +
+         ggtitle(paste(cnvs[row,4],cnvs[row,103],cnvs[row,104],cnvtype)) +
+        theme(axis.text.x = element_text(angle = 90, size = 5),legend.position = "",
+            panel.spacing.x=unit(0.2,"lines"))
+    ggsave(paste("Figures_Post/Genes",cnvs[row,1],cnvs[row,2],cnvs[row,4],cnvtype,"clusters.pdf",sep="."),width=6)
+  }      
+}
+
+#################################################################################
+################################################################################
+##### Summarize number of CNVs per individual and per population
+
+#remove sex-specific
+SexSpecific<-read.csv("SexSpecificCNVs.csv")
+SexSpecific<-SexSpecific[,2:4]
+
+##### not just genes
+cnvs<-read.csv("CNVs.genotypes.combined.CN.csv")
+cnvs<-anti_join(cnvs,SexSpecific)
+ct<-cnvs
+cts<-ct[,4:99] 
+cts[cts<1] <- 100 ##Del
+cts[cts<100] <- 0 ##Not Del
+cts[cts==100] <- 1 ##Del
+ct[,4:99]<-cts
+ctdelr<-as.data.frame(apply(ct[,c(4:99,104:115)],2,function(x) sum(x > 0)))
+names(ctdelr)[1]<-"deletions"
+
+ct<-cnvs
+cts<-ct[,4:99] 
+cts[cts<=1] <- 0 ##Not Dup
+cts[cts>1] <- 1 ##Dup
+ct[,4:99]<-cts
+ctdupr<-as.data.frame(apply(ct[,c(4:99,104:115)],2,function(x) sum(x > 0)))
+names(ctdupr)[1]<-"duplications"
+
+###Just genes
+names(SexSpecific)<-c("chrom_cnv","start_cnv","end_cnv")
+cnvs<-read.csv("CNVs.genes.combined.CN.csv")
+cnvs<-anti_join(cnvs,SexSpecific)
+ct<-cnvs
+cts<-ct[,5:100] 
+cts[cts<1] <- 100 ##Del
+cts[cts<100] <- 0 ##Not Del
+cts[cts==100] <- 1 ##Del
+ct[,5:100]<-cts
+ctdel<-as.data.frame(apply(ct[,c(5:100,115:126)],2,function(x) sum(x > 0)))
+names(ctdel)[1]<-"deletions"
+
+ct<-cnvs
+cts<-ct[,5:100] 
+cts[cts<=1] <- 0 ##Not Dup
+cts[cts>1] <- 1 ##Dup
+ct[,5:100]<-cts
+ctdup<-as.data.frame(apply(ct[,c(5:100,115:126)],2,function(x) sum(x > 0)))
+names(ctdup)[1]<-"duplications"
+
+write.csv(cbind(ctdelr,ctdupr,ctdel,ctdup),"CNVs.per.sample.csv")
+
+####################################################################################
+####################################################################################
+
+###CNVs without genes ... frequencies of CNVs with no genes
+genecnvs<-read.delim("CNVs.genes.bed",header=F,sep="\t",comment.char="")
+names(genecnvs)<-c("chrom_cnv","start_cnv","end_cnv","cnv","length_cnv",
+                   "chrom_gene","start_gene","end_gene","Gene","cat","biotype","overlap")
+genecnvs$length_gene<-genecnvs$end_gene-genecnvs$start_gene
+genecnvs$prop<-genecnvs$overlap/genecnvs$length_gene
+genecnvs<-genecnvs[order(-genecnvs$prop),]##order by proportion overlap
+#remove sex-specific
+names(SexSpecific)<-c("chrom_cnv","start_cnv","end_cnv")
+genecnvs_nosex<-anti_join(genecnvs,SexSpecific)
+
+####################################################################################
+####################################################################################
+####################################################################################
+### Frequency distributions 
+
+glen<-unique(genecnvs_nosex[,c(1:3,5,6,15,16)])
+
+###
+glen2<-glen[,c(5:6)]
+names(glen2)<-c("del","freq")
+glen3<-glen[,c(5,7)]
+names(glen3)<-c("dup","freq")
+glen4<-rbind(melt(glen2,id.vars = "freq"),melt(glen3,id.vars = "freq"))
+glen4$freq[glen4$freq==0]<-NA
+
+ggplot(glen4, aes(x=freq,fill=variable)) +
+  geom_histogram(aes(y = stat(density)),alpha=0.8,position="dodge",binwidth=1) +
+  xlab("Number of Individuals") +
+  ylab("Number of CNVs") +
+  ylim(0,0.7) +
+  facet_grid(variable~.) +
+  theme_bw()
+ggsave("CNV.freq.props.pdf",width=6,height=6)
+
+####
+# Plot per population
+bi<-read.csv("CNVs.genotypes.combined.CN.biallelic.csv")
+bi<-bi[!duplicated(paste0(bi$X.Chrom,bi$Start,bi$End)),]
+bi<-anti_join(bi,SexSpecific)
+big<-read.csv("CNVs.genes.combined.CN.biallelic.csv")
+big<-big[!duplicated(big$Gene),]
+
+gbi<-melt(bi[,c(104:115)])
+gbi[c("pop","cnv")]<-str_split_fixed(gbi$variable,"d",2)
+gbi$cnv<-gsub("el","del",gbi$cnv)
+gbi$cnv<-gsub("up","dup",gbi$cnv)
+gbi<-gbi[gbi$value>0,]
+gbi$pop<-factor(gbi$pop,levels=poporder)
+
+ggplot(gbi, aes(x=value, fill=pop)) +
+  geom_histogram(aes(y = stat(density)),alpha=0.8,position="dodge",binwidth=1) +
+  facet_grid(pop~cnv) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  ggtitle("A) CNVs") +
+  xlab("Number of Individuals with CNV") +
+  ylab("Proportion") +
+  theme_bw() +
+  theme(legend.position = "") 
+ggsave("CNVs.genotypes.combined.CN.biallelic.csv.freqpop.pdf",height=5,width=4)
+
+gbig<-melt(big[,c(115:126)])
+gbig[c("pop","cnv")]<-str_split_fixed(gbig$variable,"d",2)
+gbig$cnv<-gsub("el","del",gbig$cnv)
+gbig$cnv<-gsub("up","dup",gbig$cnv)
+gbig<-gbig[gbig$value>0,]
+gbig$pop<-factor(gbig$pop,levels=poporder)
+
+ggplot(gbig, aes(x=value, fill=pop)) +
+  geom_histogram(aes(y = stat(density)),alpha=0.8,position="dodge",binwidth=1) +
+  facet_grid(pop~cnv) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+  ggtitle("B) Gene CNVs") +
+  xlab("Number of Individuals with CNV") +
+  ylab("Proportion") +
+  theme_bw() +
+  theme(legend.position = "")
+ggsave("CNVs.genes.combined.CN.biallelic.csv.freqpop.pdf",height=5,width=4)
+

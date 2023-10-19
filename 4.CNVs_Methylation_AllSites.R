@@ -1,0 +1,124 @@
+##R script
+### 4. Calculates Methylation along Genes
+#input files: Samples metadata, sex-specific CNVs, list of ensembl gene IDs and transcript IDs with UCSC coordinates, gene CNVs, Methylation estimates at filtered CpG sites and the order of the samples
+#output files: Figure: gene cnvs and promoter methylation density
+
+library(RColorBrewer)
+library(dplyr) 
+library(stringr)
+library(plyr)
+library(ggplot2)
+library(reshape)
+library(pheatmap)
+
+###############################################################################################################
+samples<-read.table("Samples96.out",col.names=c("sample","sex","pop")) 
+#order
+poporder<-c("LET","BAR","NYN","FAL","KIE","SYL") ###order by increasing PSU when plotting
+sampleorder<-samples$sample[order(match(samples$pop,poporder),samples$sex)]
+samples$sample<-factor(samples$sample,levels=sampleorder)
+
+###############################################################################################################
+genes<-read.table("Genes.UCSC.ensembl.transcripts.out",header=T)
+genes<-genes[,c(1:5,17:20)]
+
+## exclude
+SexSpecific<-read.csv("SexSpecificCNVs.csv")
+SexSpecific<-SexSpecific[,2:4]
+
+###############################################################################################################
+###############################################################################################################
+##Methylation
+methsample<-read.table("MethylationSampleOrder.txt",sep=" ")
+
+##already filtered for coverage of 10x
+meth0<-read.csv("MethylationProportions.txt")
+names(meth0)[9]<-"chrom"
+##remove decimals from transcript IDs
+meth0$feature.name<-gsub("(.*)\\..*","\\1",meth0$feature.name)
+
+temp<-meth0[,1:11]
+methcov<-meth0[,1:11]
+##calculate C/T ratios per sample.
+offset2=3
+for(n in 1:length(methsample)){
+  ##offset by 13 in columns
+  off=11
+  ##increment by 3 each time in the loop
+  inc<-off+(n*offset2)
+  temp[,(n+11)]<-meth0[,inc]/meth0[,(inc-1)]
+  methcov[,(n+11)]<-meth0[,(inc-1)]
+}
+names(temp)[12:ncol(temp)]<-as.character(methsample[1,])
+names(methcov)[12:ncol(methcov)]<-as.character(methsample[1,])
+###add location of promoter based on annotations from Britta
+temp<-cbind(temp,meth0[tail(names(meth0), 5)])
+methcov<-cbind(methcov,meth0[tail(names(meth0), 5)])
+###add gene names
+meth<-merge(temp,genes,by.x="feature.name",by.y="GeneID")
+meth_all<-merge(temp,genes,by.x="feature.name",by.y="GeneID")
+length(unique(meth$feature.name))
+length(unique(meth$Gene))
+methcov<-merge(methcov,genes,by.x="feature.name",by.y="GeneID")
+
+###aggregate by gene name to calculate mean methylation per gene promoter
+meth2<-aggregate(.~Gene*feature,meth[,c(12:98,103,107)], function(x) mean(x, na.rm=TRUE), na.action = na.pass) ##per gene, all exon, intron and promoter
+max(rowSums(is.na(meth2)))
+tail(sort(rowSums(is.na(meth2))))
+
+###Read Depth Coverage of CpGs, and then normalize by colSum
+methcov2<-aggregate(.~Gene*feature,methcov[,c(12:98,103,107)], function(x) mean(x, na.rm=TRUE), na.action = na.pass) ##per gene, all exon, intron and promoter
+methcov3<-cbind(methcov2[,1:2],methcov2[,3:ncol(methcov2)]/colSums(methcov2[,3:ncol(methcov2)],na.rm=TRUE)*nrow(methcov2))
+
+###protein coding
+meth2_g<-merge(meth2,unique(genes[,c(1,4,7,8)]))
+
+#####################################
+## How many sites per promoter vs how many CpG sites
+methprom<-methcov[methcov$feature=="promoter",]
+methprom2<-aggregate(feature.name~Gene,methprom,length)
+#####################################
+
+###############################################################################################################
+###############################################################################################################
+cnvsall<-read.csv("CNVs.genes.combined.CN.csv")
+cnvsall2<-read.csv("CNVs.genes.combined.csv")
+cnvsdup<-read.csv("CNVs.genes.duplications.CN.csv")
+cnvsdel<-read.csv("CNVs.genes.deletions.CN.csv")
+
+###############################################################################################################
+###############################################################################################################
+## Summarize mean levels of methylation per population and overall
+temp<-meth2_g
+samples<-samples[samples$sample %in% methsample,]
+group <- factor(samples$pop)
+groupLevels <- levels(group)
+for(i in groupLevels){
+  inds<-samples$sample[samples$pop==i]
+  temp[length(temp)+1]<-rowMeans(temp[,names(temp) %in% inds],na.rm=TRUE)
+}
+names(temp)[(length(temp)-5):length(temp)]<-groupLevels
+temp$avg<-rowMeans(temp[,names(temp) %in% samples$sample],na.rm=TRUE)
+
+##################################################################
+meth_cnvs<-merge(temp,cnvsdup,by="Gene",all.x=T)
+meth_cnvs$cnv<-meth_cnvs$chrom_cnv
+meth_cnvs$cnv<-ifelse(is.na(meth_cnvs$cnv),0,1)
+meth_cnvs$cnv<-factor(meth_cnvs$cnv)
+
+###################################################################################################################
+###############################################################################
+## Group Lineage-specific
+
+meth_cnvs2<-meth_cnvs
+meth_cnvs2$cat[meth_cnvs2$cat=="LSD"]<-"LSG"
+meth_cnvs2$cat[meth_cnvs2$cat=="LSGd"]<-"LSG"
+meth_cnvs2$cat[meth_cnvs2$cat=="LSGs"]<-"LSG"
+
+ggplot(meth_cnvs2[meth_cnvs2$biotype=="protein_coding" & meth_cnvs2$feature=="promoter",], 
+       aes(x=avg,fill=cat)) +
+  geom_density(alpha=0.4) +
+  theme_light(base_size = 14) +
+  facet_grid(cat~cnv) +
+  ylab("") + xlab("promoter methylation") 
+ggsave("GeneCNV.Methylation.density.cat.features.pdf")
