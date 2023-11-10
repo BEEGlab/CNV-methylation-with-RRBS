@@ -9,10 +9,12 @@
 #################################
 
 # 1.0 Fastqc on raw reads
+'''
 for file in *.fastq.gz
 do
 fastqc ${file} -t 16 -o /01FASTQCresults
 done
+'''
 
 # 1.1 FastqtoSAM
 for i in *R1_001.fastq.gz; do
