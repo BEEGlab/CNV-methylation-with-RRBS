@@ -17,6 +17,7 @@ done
 ```
 
 # 1.1 FastqtoSAM
+```bash
 for i in *R1_001.fastq.gz; do
     [[ $i =~ (.*)_(.*)_(.*)_R1_001.fastq.gz ]]
     java -Xmx16G -jar picard.jar FastqToSam \
@@ -29,8 +30,10 @@ LIBRARY_NAME= ${BASH_REMATCH[1]}_${BASH_REMATCH[2]} \
 PLATFORM_UNIT= HGJFJBBXX.${BASH_REMATCH[3]} \
 PLATFORM= illumina
 done
+```
 
 # 1.2 MarkIlluminaAdapters
+```bash
 for i in *_unmapped.bam; do
   #F12149-L1_S1_unmapped.bam
     [[ $i =~ (.*)_unmapped.bam ]]
@@ -38,11 +41,12 @@ for i in *_unmapped.bam; do
   I=$i \
   O=${BASH_REMATCH[1]}_unmapped_xt.bam \
   M=${BASH_REMATCH[1]}_unmapped_xt_metrics.txt
+```
 
 ##############################################
 #2 Mapping the Fastq files to the reference #
 ##############################################
-
+```bash
 # 2.0 index Reference genome
 bwa index GasAcuV1.fa
 
@@ -119,10 +123,13 @@ echo 'GATK'
    -R GasAcuV1.fa \
    -o !file!_out \
    -I !file!_clean_dedup.bam
+```
 
 ####################################################################
 #4 Getting the coverage from  picard_collect_wgs_metrics.txt files #
-####################################################################   
+####################################################################  
+
+```python
 # import os
 import pandas as pd
 import numpy as np
@@ -166,3 +173,4 @@ df.to_csv('MEAN_coverage_from_picard_collect_wgs_metrics.csv', index=False)
 
 print(f'Average MEAN_COVERAGE: {average_mean_coverage}')
 print(f'Standard Deviation of MEAN_COVERAGE: {sd_mean_coverage}')
+```
