@@ -9,7 +9,7 @@
 #################################
 
 # 1.0 Fastqc on raw reads
-'''
+'''bash
 for file in *.fastq.gz
 do
 fastqc ${file} -t 16 -o /01FASTQCresults
