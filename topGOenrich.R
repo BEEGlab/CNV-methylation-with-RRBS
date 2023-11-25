@@ -1,8 +1,7 @@
 ##R script
 ###Gene ontology enrichment of lists of genes
-#input files: list of gene IDs of interest in the first column, and full list of genes with associated gene ontologies
+#input files: list of gene IDs of interest in the first column, and full list of genes with associated gene ontologies from Ensembl Biomart
 #output files: GO enrichment analysis
-
 
 ##########################################################################################
 genesIDs<-read.csv("genes.list.csv") ##list of gene IDs (in the first column) to look for enrichment
