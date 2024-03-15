@@ -1,0 +1,774 @@
+# RRBS scripts used for analysis related to the manuscript 
+
+for 'Epigenetic diversity of genes with copy number variations among natural populations of the three-spined stickleback'
+by Frédéric J. J. Chain,*, Britta S. Meyer,*, Melanie J. Heckwolf, Sören Franzenburg, Christophe Eizaguirre and Thorsten B.H. Reusch.
+
+compiled by Britta S. Meyer 
+at 26th October 2023 and updated 15th March 2024
+
+## 1 Preprocessing / Quality of Fastq files 
+
+### 1.1 Check for BS conversion sucess
+
+```bash
+cegxqc !file!.fastq.gz
+```
+### 1.2 Run fastqc and multiqc
+
+```bash
+fastqc !file!.fastq.gz -t8 -o /PATH/01FASTQC_RESULTS
+```
+
+### 1.3 Remove adaptor
+
+Use cutadapt at most 10 % errors with three adaptors 
+
+```bash
+cutadapt -e 0.1 -q 20 -m 20 -O 1 -a NNAGATCGGAAGAGCACAC -a AGATCGGAAGAGCACAC -a ATCGGAAGAGCACAC -o /PATH/00FASTQ_raw/trimmed_new/!file!.trimmed_cutadapt.fastq.gz !file!.fastq.gz
+cd /PATH/RRBS/00FASTQ_raw/trimmed_new/
+/PATH/software/FastQC/fastqc !file!.trimmed_cutadapt.fastq.gz
+```
+### 1.4 Removing some tiles (because of an airbubble) 
+
+from one flowcell affecting S1-S12
+
+```bash
+zcat !file!.trimmed_cutadapt.fastq.gz | awk 'BEGIN{instrument="@D00759L"; tile_up=2116; tile_low=2101;trim_len=66;FS=":"}($1!=instrument||$5<tile_low || $5>tile_up){print $0}($1==instrument&&$5>=tile_low&&$5<=tile_up){print $0;getline; print substr($0,1,trim_len);getline; print $0; getline; print substr($0,1,trim_len)}' > bbmap_tile/!file!.trimmed_cutadapt_awktrimmed_range.fastq
+cd bbmap_tile
+fastqc !file!.trimmed_cutadapt_awktrimmed_range.fastq
+```
+
+## 2 Bismark 
+
+### 2.1 Prepare genome 
+
+```bash
+bismark_genome_preparation --bowtie2  --verbose --genomic_composition  03bismark_genome_preparation_bowtie2/
+```
+
+### 2.2  Mapping to genome with -0.20 allowing for 3 mismatches 
+
+```bash
+bismark --bowtie2 -q --phred33-quals --non_directional --non_bs_mm --score_min L,0,-0.2 --genome /PATH/03bismark_genome_preparation_bowtie2/ !file!.gz -o /PATH/04_mapped_bismark_btw2/btw2_default_0.2_trim_redo --temp_dir /PATH/04_mapped_bismark_btw2/btw2_default_0.2_trim_redo_tiles
+```
+
+### 2.3 Run bismark_methylation_extractor with various options
+
+```bash
+bismark_methylation_extractor -s --bedGraph --merge_non_CpG --gzip --multicore 10 --ignore_3prime 1 --genome_folder /PATH/03bismark_genome_preparation_bowtie2/ /PATH/mapped_bismark_btw2/btw2_default_0.2_trim_redo_tiles/!file!_bismark_bt2.sam.gz
+```
+
+### 2.4: Generate a report using bismark2report
+
+```bash
+bismark2report -o Report!file!.html -alignment_report /PATH/mapped_bismark_btw2/btw2_default_0.2_trim_redo_tiles/!file!._bismark_bt2_SE_report.txt -dedup_report none -splitting_report !file!._bismark_bt2_splitting_report.txt -mbias_report !file!._bismark_bt2.M-bias.txt
+```
+
+
+## 3 methylkit 
+
+### 3.1 loading the data and excluding low quality data 
+
+```R
+library(methylKit)
+# Set the working directory
+setwd("~/mnt_work/RRBS/")
+# List files with the pattern ".cov"
+name_cov <- list.files('~/mnt_work/RRBS/methylation_extractor/', pattern = ".cov")
+# Create a list of file labels, excluding specific indices
+file_labels_r <- as.list(name_cov[-c(2, 8, 25, 31, 55, 70, 79, 83, 96)])
+# Define a list of sample IDs
+sample_id_r <- list("S1", "S3", "S4", "S5", "S6", "S7", "S9", "S10", "S11", "S12", "S13", "S14", "S15", "S16", "S17", "S18", "S19", "S20", "S21", "S22", "S23", "S24", "S26", "S27", "S28", "S29", "S30", "S32", "S33", "S34", "S35", "S36", "S37", "S38", "S39", "S40", "S41", "S42", "S43", "S44", "S45", "S46", "S47", "S48", "S49", "S50", "S51", "S52", "S53", "S54", "S56", "S57", "S58", "S59", "S60", "S61", "S62", "S63", "S64", "S65", "S66", "S67", "S68", "S69", "S71", "S72", "S73", "S74", "S75", "S76", "S77", "S78", "S80", "S81", "S82", "S84", "S85", "S86", "S87", "S88", "S89", "S90", "S91", "S92", "S93", "S94", "S95")
+# Define a vector for treatment
+treatment_r <- c(1, 2, 2, 3, 3, 4, 5, 5, 6, 6, 6, 6, 1, 1, 5, 5, 2, 2, 3, 3, 4, 4, 4, 6, 6, 1, 1, 5, 2, 2, 3, 3, 3, 3, 4, 4, 6, 6, 1, 1, 5, 5, 2, 2, 2, 2, 3, 3, 4, 4, 6, 1, 1, 5, 5, 1, 1, 2, 2, 3, 4, 4, 6, 3, 3, 5, 5, 2, 2, 1, 1, 6, 6, 4)
+# Set the working directory again
+setwd("~/mnt_work/RRBS/methylation_extractor/")
+# Load data into myobjDB
+myobjDB = methRead(
+  file_labels_r,
+  sample_id_r,
+  assembly = "stickleback_GasAcu1",
+  mincov = 1,
+  pipeline = 'bismarkCoverage',
+  context = "CpG",
+  treatment = treatment_r,
+  dbtype = "tabix",
+  dbdir = "methylDB"
+)
+```
+
+
+### 3.2 Count the number of unfiltered CpGs per individual 
+                  
+```R
+### Count the number of M CpGs per individual, unfiltered
+mat <- data.frame(num.records = 1, sample.id = 1, number = 1:87)
+i=0
+for(i in 1:length(myobjDB@.Data)) {
+  a<-print(myobjDB[[i]]@num.records)
+  b<-print(myobjDB[[i]]@sample.id)
+  mat[i,1] <- a
+  mat[i,2] <- b 
+  i <- i+1
+}
+
+# Display the number of M CpGs for the first individual in myobjDB
+myobjDB[[1]]@num.records
+
+# Write the result to a CSV file
+write.csv(mat, file = "Methylkit_M_CpG_unfiltered.txt")
+```
+
+### 3.3 Count the number of filtered CpGs per individual 
+
+```R
+# Filter PCR-bias and low coverage CpGs
+filtered.myobj10 = filterByCoverage(
+  myobjDB,
+  lo.count = 10,
+  lo.perc = NULL,
+  hi.count = NULL,
+  hi.perc = 99.9,
+  suffix = "_filtered_min10x"
+)
+# Create a matrix for the filtered object
+i=0
+mat_filtered10x <- data.frame(num.records = 1, sample.id = 1, number = 1:87)
+for(i in 1:length(filtered.myobj10@.Data)) {
+  a<-print(filtered.myobj10[[i]]@num.records)
+  b<-print(filtered.myobj10[[i]]@sample.id)
+  mat_filtered10x[i,1] <- a
+  mat_filtered10x[i,2] <- b 
+  i <- i+1
+}
+
+# Write the filtered matrix to a CSV file
+write.csv(mat_filtered10x, file = "Methylkit_M_CpG_filtered10x.txt")
+```
+
+
+### 3.4 Normalize read coverage distributions between samples 
+Normalize the read coverage distributions between samples.
+This step reduces bias in statistical tests due to over-sampling of reads in certain samples.
+Use the "median" method for normalization
+
+```R
+
+norm_filtered.myobj10 = normalizeCoverage(filtered.myobj10, method = "median")
+
+#######################################################################################
+#2 methylkit e) Unite function - get all CpGs covered in 87 / 11 indivduals per group #
+#######################################################################################
+
+
+# A) Create a matrix for 87 individuals with 100 percent
+unite_norm_87_10x_100 = unite(norm_filtered.myobj10, destrand = FALSE)
+
+# B) Create a matrix for 87 individuals with 70 percent
+# excluded all sites that were present in fewer than 11 individuals per treatment group
+
+unite_norm_87_10x_70 = unite(norm_filtered.myobj10, destrand = FALSE, min.per.group = 11L)
+
+
+################################
+#2 methylkit f) saving results #
+################################
+
+# keeping objects to be able to later load them again 
+save(myobjDB, file="myobjDB.RData")
+save(filtered.myobj10, file="filtered.myobj10.RData")
+save(norm_filtered.myobj10, file="norm_filtered.myobj10.RData")
+save(unite_norm_87_10x_100, file="unite_norm_87_10x_100.RData")
+save(unite_norm_87_10x_70, file="unite_norm_87_10x_70.RData")
+
+# 
+```
+We have 525664 CpG positions shared in the unfiltered Methylkit file wit 87 individuals with 10x coverage minimum and shared across 70 percent of the individuals (resp. 11 individulas per group). We than need to blacklist the know SNPs to prevent the overestimation of methylation calls. 
+
+# 4. Exclude C-to-T and G-to-A-SNPs from the RRBS data
+C-to-T and G-to-A-SNPs were derived from custom written perl scripts (see 3.1/3.2) from the 96 wild caught stickleback individuals.
+
+
+## 4.1 We run the perl scripts to get a txt file containing CT and GA SNPs (see above).
+bcftools view -H clean_snps_gq20_maf_0.005.recode.vcf -O v -o Noheader-clean_snps_gq20_maf_0.005.recode.vcf
+perl snip_detect_CT.pl Noheader-clean_snps_gq20_maf_0.005.recode.vcf
+perl snip_detect_GA.pl Noheader-clean_snps_gq20_maf_0.005.recode.vcf
+
+### 4.1.1 Use perl script snip_detect_CT.pl to detect CT SNP  
+
+```
+# perl script for CT
+
+#!/usr/bin/perl
+#print "base col A: ";
+$pat_A=C;
+
+#print "base col B: ";
+$pat_B=T;
+
+$col_A = 3;
+$col_B = 4;
+
+open  (FILEIN, '<', @ARGV[0]) || die  "Error: fnf.";
+open  (FILEOUT,'>', 'result_pat_'.C.'_'.T.'.txt');
+
+
+while(<FILEIN>){
+
+  chomp($_);
+  @eintraege = split(/\t/, $_);
+
+  $hit_A = @eintraege[$col_A] =~ m/C/;
+  $hit_B = @eintraege[$col_B] =~ m/T/;
+
+  if($hit_A == 1 && $hit_B == 1){
+    print FILEOUT @eintraege[0]."\t".@eintraege[1]."\n";
+    }
+}
+
+close FILEIN;
+close FILEOUT;
+
+exit 0;
+```
+### 4.1.2 Use perl script snip_detect_GA.pl to detect GA SNP
+
+```
+#!/usr/bin/perl
+
+$col_A = 3;
+$col_B = 4;
+
+open  (FILEIN, '<', @ARGV[0]) || die  "Error: fnf.";
+open  (FILEOUT,'>', 'result_pat_'.G.'_'.A.'.txt');
+
+
+while(<FILEIN>){
+
+  chomp($_);
+  @eintraege = split(/\t/, $_);
+
+  $hit_A = @eintraege[$col_A] =~ m/G/;
+  $hit_B = @eintraege[$col_B] =~ m/A/;
+
+  if($hit_A == 1 && $hit_B == 1){
+    print FILEOUT @eintraege[0]."\t".@eintraege[1]."\n";
+    }
+}
+
+close FILEIN;
+close FILEOUT;
+
+exit 0;
+```
+## 4.2. Use R and load the unite object 
+
+```
+# Load the RData file
+load(file = "unite_norm_87_10x_70.RData")
+# Update the database path, if necessary
+    # unite_norm_87_10x_70@dbpath = "PATH/05_RESTART_methylation_extractor/methylDB/methylBase_9b071c3c380.txt.bgz"
+# Get the data
+mat = getData(unite_norm_87_10x_70)
+# Summary of sample IDs in unite_norm_87_10x_70 (there are 87 samples)
+summary(unite_norm_87_10x_70@sample.ids)
+
+# Number of records in unite_norm_87_10x_70 (there are 525,664 records)
+unite_norm_87_10x_70@num.records
+```
+
+## 4.3. Load "blacklist.bed" into R as a GRanges file
+
+Load special function to change BED to GRanges. I initially got this from https://rdrr.io/github/davetang/bedr/src/R/bed_to_granges.R Thanks for this nice piece.
+
+```
+' BED to GRanges
+#'
+#' This function loads a BED-like file and stores it as a GRanges object.
+#' The tab-delimited file must be ordered as 'chr', 'start', 'end', 'id', 'score', 'strand'.
+#' The minimal BED file must have the 'chr', 'start', 'end' columns.
+#' Any columns after the strand column are ignored.
+#' 
+#' @param file Location of your file
+#' @keywords BED GRanges
+#' @export
+#' @examples
+#' bed_to_granges('my_bed_file.bed')
+
+bed_to_granges <- function(file){
+  df <- read.table(file,
+                   header=F,
+                   stringsAsFactors=F)
+  
+  if(length(df) > 6){
+    df <- df[,-c(7:length(df))]
+  }
+  
+  if(length(df)<3){
+    stop("File has less than 3 columns")
+  }
+  
+  header <- c('chr','start','end','id','score','strand')
+  names(df) <- header[1:length(names(df))]
+  
+  if('strand' %in% colnames(df)){
+    df$strand <- gsub(pattern="[^+-]+", replacement = '*', x = df$strand)
+  }
+  
+  library("GenomicRanges")
+  
+  if(length(df)==3){
+    gr <- with(df, GRanges(chr, IRanges(start, end)))
+  } else if (length(df)==4){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id))
+  } else if (length(df)==5){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score))
+  } else if (length(df)==6){
+    gr <- with(df, GRanges(chr, IRanges(start, end), id=id, score=score, strand=strand))
+  }
+  return(gr)
+}
+
+# Load CT SNPs, duplicate START column to have an END column for the proper BED file format, and save as a BED file
+CT_gq20maf = read.csv(file = "PATH/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_C_T.txt", sep = "\t", header = FALSE)
+CT_gq20maf = cbind(CT_gq20maf, V3 = rep(CT_gq20maf$V2))
+write.table(CT_gq20maf, file = "PATH/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_C_T.bed", row.names = FALSE, quote = FALSE, sep = "\t", col.names = FALSE)
+
+# Load the data as a GRanges object
+blacklist_CT_bed <- bed_to_granges(file = "PATH/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_C_T.bed")
+
+# Load GA SNPs, duplicate column, and save as a BED file
+AG_gq20maf = read.csv(file = "~/PATH/GENOME/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_G_A.txt", sep = "\t", header = FALSE)
+AG_gq20maf = cbind(AG_gq20maf, V3 = rep(AG_gq20maf$V2))
+write.table(AG_gq20maf, file = "~/PATH/GENOME/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_G_A.bed", row.names = FALSE, quote = FALSE, sep = "\t", col.names = FALSE)
+
+# Load the data as a GRanges object
+blacklist_GA_bed <- bed_to_granges(file = "~/mnt_work/GENOME/08_filteredVars/vcf/improved_filter/blacklist/6_pop_result_pat_G_A.bed")
+
+
+# Remove ChrM as it causes an error
+# Create blacklist_CT_bed_without_ChrM by excluding sequences with 'chrM'
+blacklist_CT_bed_without_ChrM <- blacklist_CT_bed[!seqnames(blacklist_CT_bed) == 'chrM']
+# Create blacklist_GA_bed_without_ChrM by excluding sequences with 'chrM'
+blacklist_GA_bed_without_ChrM <- blacklist_GA_bed[!seqnames(blacklist_GA_bed) == 'chrM']
+
+
+# Create overlap for CT positions, which might be wrongly assigned as unmethylated
+# Use selectByOverlap to find positions that overlap between unite_norm_87_10x_70 and blacklist_CT_bed_without_ChrM
+blacklist_CT_bed_methylBase <- selectByOverlap(unite_norm_87_10x_70, blacklist_CT_bed_without_ChrM)
+# Display the dimensions of blacklist_CT_bed_methylBase
+dim(blacklist_CT_bed_methylBase)
+# There are 9,240 positions that overlap between CT SNPs and unite_norm_87_10x_70
+
+# Create overlap for GA positions, which might be wrongly assigned as unmethylated
+# Use selectByOverlap to find positions that overlap between unite_norm_87_10x_70 and blacklist_GA_bed_without_ChrM
+blacklist_GA_bed_methylBase <- selectByOverlap(unite_norm_87_10x_70, blacklist_GA_bed_without_ChrM)
+# Display the dimensions of blacklist_GA_bed_methylBase
+dim(blacklist_GA_bed_methylBase)
+# There are 9,157 positions that overlap between GA SNPs and unite_norm_87_10x_70
+
+# Calculate the total number of CpG positions that will be removed
+total_removed_positions <- nrow(blacklist_CT_bed_methylBase) + nrow(blacklist_GA_bed_methylBase)
+total_removed_positions
+# 18,397 CpG positions will be removed as they overlap with known CT/GA SNPs.
+```
+
+## 4.4 Intersect blacklist and my methylkit file 
+
+Now we will intersect the bedfile with SNPs and Methylkit unite-file. 
+
+```
+# Create overlap to correct for CT SNPs
+# Convert unite_norm_87_10x_70 to GRanges object
+unite_norm_87_10x_70GRanges <- as(unite_norm_87_10x_70, "GRanges")
+# Find positions with no overlap with CT SNPs
+Overlap_granges = unite_norm_87_10x_70GRanges[countOverlaps(unite_norm_87_10x_70GRanges, blacklist_CT_bed_without_ChrM) == 0L]
+
+# Select CpGs that do not overlap with CT SNPs
+unite_norm_87_10x_70_CT_corr <- selectByOverlap(unite_norm_87_10x_70, Overlap_granges)
+
+# Convert unite_norm_87_10x_70_CT_corr to a methylBaseDB object
+objDB = makeMethylDB(unite_norm_87_10x_70_CT_corr, "methylBaseDB")
+
+
+# Correct for GA SNPs as well
+# Convert unite_norm_87_10x_70_CT_corr to a GRanges object
+unite_norm_87_10x_70_CT_corr_GRanges <- as(unite_norm_87_10x_70_CT_corr, "GRanges")
+
+# Find positions with no overlap with GA SNPs
+Overlap_grangesGA = unite_norm_87_10x_70_CT_corr_GRanges[countOverlaps(unite_norm_87_10x_70_CT_corr_GRanges, blacklist_GA_bed_without_ChrM) == 0L]
+
+# Select CpGs that do not overlap with GA SNPs
+unite_norm_87_10x_70_CT_GA_corr <- selectByOverlap(objDB, Overlap_grangesGA)
+
+# Display the dimensions of unite_norm_87_10x_70_CT_GA_corr
+dim(unite_norm_87_10x_70_CT_GA_corr)
+
+# Save the corrected data
+# setwd("~/PATH/RRBS/07_RESTART_Methylkit/DATA")
+save(unite_norm_87_10x_70_CT_GA_corr, file = "~/PATH/RRBS/07_RESTART_Methylkit/DATA/unite_norm_87_10x_70_CT_GA_corr.RData")
+save(unite_norm_87_10x_70_CT_GA_corr, file = "unite_norm_87_10x_70_CT_GA_corr.RData")
+
+# 525,664 total positions - 18,397 overlapping positions = 507,267 retained positions
+```
+
+
+## 4.5 Remove sex chromosomes to avoid potential bias
+
+```
+# Load the previously saved unite_norm_87_10x_70_CT_GA_corr data
+# load(file = "unite_norm_87_10x_70_CT_GA_corr.RData")
+
+# Convert unite_norm_87_10x_70_CT_GA_corr to a GRanges object
+unite_norm_87_10x_70_CT_GA_corr_granges <- as(unite_norm_87_10x_70_CT_GA_corr, "GRanges")
+
+# Remove the sex chromosome (chrXIX)
+unite_norm_87_10x_70_CT_GA_corr_without_Sex <- unite_norm_87_10x_70_CT_GA_corr_granges[!seqnames(unite_norm_87_10x_70_CT_GA_corr_granges) == 'chrXIX']
+
+# Convert the data to a methylBaseDB object
+unite_norm_87_10x_70_CT_GA_corr_DB = makeMethylDB(unite_norm_87_10x_70_CT_GA_corr, "methylBaseDB")
+
+# Use selectByOverlap to retain only positions that don't overlap with the sex chromosome
+unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB <- selectByOverlap(unite_norm_87_10x_70_CT_GA_corr_DB, unite_norm_87_10x_70_CT_GA_corr_without_Sex)
+
+# Save the processed data without sex chromosomes
+save(unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB, file = "unite_norm_87_10x_70_CT_GA_corr_nosex.RData")
+# load(file = "unite_norm_87_10x_70_CT_GA_corr_nosex.RData")
+
+# Extract the data
+mat_corr = getData(unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB)
+
+# Remove rows containing NA values, which might be introduced at the unite step
+mat_corr = mat_corr[rowSums(is.na(mat_corr)) == 0, ]
+
+# Calculate methylation percentages
+meth.mat.corr = mat_corr[, unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB@numCs.index] /
+                (mat_corr[, unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB@numCs.index] + 
+                 mat_corr[, unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB@numTs.index])
+
+# Assign sample names to the columns
+names(meth.mat.corr) = unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB@sample.ids
+
+# Resulting in a dataset with 495,635 CpG sites.
+```
+
+
+# 5 methylkit -  Calling differentialy methylated sites in pairwise comparison
+This has been done for all 15 pairwise comparisons and other difference = 25
+
+```
+#1# Subset pop1
+subset_pop1 <- (pop[pop$pop2 == 'pop1',])
+sample.ids_pop1 <- subset_pop1$sampleID
+subset_pop1$treatment <- 1
+
+#2# Subset pop2
+subset_pop2 <- (pop[pop$pop2 == 'pop2',])
+sample.ids_pop2 <- subset_pop2$sampleID
+subset_pop2$treatment <- 0
+
+# Combine pop1 and pop2 data
+pop1_pop2 <- rbind(subset_pop1, subset_pop2)
+pop1_pop2 <- pop1_pop2[order(pop1_pop2$number),]
+
+# Reorganize unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB with pop1 and pop2 labels
+pop1_pop2_obj = reorganize(unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB,
+                           sample.ids = as.vector(pop1_pop2$sampleID),
+                           treatment = pop1_pop2$treatment,
+                           suffix = "pop1_pop2")
+
+# Save the reorganized data
+save(pop1_pop2_obj, file = "~/2023/DMS/qvalue_0.05_diff15/pop1_pop2_obj.RData")
+
+# Calculate methylation differences between pop1 and pop2
+mydiff_0.05_1_pop1_pop2 = calculateDiffMeth(pop1_pop2_obj, mc.cores = 8)
+
+# Get hypermethylation differences
+myDiff15p.hyper_1 = getMethylDiff(mydiff_0.05_1_pop1_pop2, difference = 15, qvalue = 0.05, type = "hyper", save.db = FALSE)
+
+# Get hypomethylation differences
+myDiff15p.hypo_1 = getMethylDiff(mydiff_0.05_1_pop1_pop2, difference = 15, qvalue = 0.05, type = "hypo", save.db = FALSE)
+
+# Get all differential methylation differences
+myDiff15p.all_1 = getMethylDiff(mydiff_0.05_1_pop1_pop2, difference = 15, qvalue = 0.05, save.db = FALSE)
+
+# Save the results as RData
+save(mydiff_0.05_1_pop1_pop2, file = "/PATH/DMS/qvalue_0.05_diff15/mydiff_0.05_1_pop1_pop2.RData")
+save(myDiff15p.hyper_1, file = "/PATH/DMS/qvalue_0.05_diff15/hyper_mydiff_0.05_1_pop1_pop2_obj.RData")
+save(myDiff15p.hypo_1, file = "/PATH/2023/DMS/qvalue_0.05_diff15/hypo_mydiff_0.05_1_pop1_pop2_obj.RData")
+save(myDiff15p.all_1, file = "/PATH/2023/DMS/qvalue_0.05_diff15/all_mydiff_0.05_1_pop1_pop2_obj.RData")
+
+# Save all 15 pairwise comaprisons as bedfiles
+
+for (i in 1:15) {
+  myDiff <- get(paste0("myDiff15p.all_", i))
+  mydiff_0.05_grangesl <- as(myDiff, "GRanges")
+  
+  df <- data.frame(
+    seqnames = seqnames(mydiff_0.05_grangesl),
+    starts = start(mydiff_0.05_grangesl) - 1,
+    ends = end(mydiff_0.05_grangesl),
+    names = rep(".", length(mydiff_0.05_grangesl)),
+    scores = elementMetadata(mydiff_0.05_grangesl),
+    strands = strand(mydiff_0.05_grangesl)
+  )
+  
+  file_name <- paste0("PATH/qvalue_0.05_diff15/myDiff15p.all_", i, "_granges.bed")
+  
+  write.table(
+    df,
+    file = file_name,
+    quote = FALSE,
+    sep = "\t",
+    row.names = FALSE
+  )
+}
+```
+
+# 6 Annotation of the CpG positions.
+The R-code below focuses on converting genomic data into a format suitable for analysis (GRanges) and parsing genomic features from a BED file. Here we use the function bed_to_granges to a file derived and reformatted from the UCSC server and encompassing the ensemble gene predictions "ensGenegenepred.bed".
+
+## 6.1 Load packages and data
+
+```
+# Load packages
+library(genomation)
+library(methylKit)
+library(GenomicRanges)
+library(dplyr)
+
+# Load a BED file containing genomic features. The path to the BED file is specified.
+bed.file=("~/mnt_work/RRBS/07_RESTART_Methylkit/DATA/ensGenegenepred.bed")
+
+
+# Load my specific RData (unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB) file containing the methylation data (normalized, filtered, nosex chromsome - see steps above).
+load(file="~/2023/unite_norm_87_10x_70_CT_GA_corr_nosex.RData")
+
+# Convert the loaded data into a GRanges object. This step facilitates the manipulation and analysis of genomic data
+# by leveraging the functionalities provided by the GenomicRanges package.
+unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl = as(unite_norm_87_10x_70_CT_GA_corr_without_Sex_DB,"GRanges")
+```
+
+## 6.2 Create a gene.parts object.
+
+```
+# Read transcript features from the specified BED file. This function is designed to parse genomic features
+# such as exons, introns, promoters, and transcription start sites (TSS) from the file, returning a GRangesList.
+# The GRangesList object contains the locations of these features. Parameters are set to include a 1500 bp
+# upstream flank (up.flank) and a 500 bp downstream flank (down.flank) for promoters, and to ensure that
+# unique promoters (unique.prom) are considered.
+
+gene.parts = readTranscriptFeatures(bed.file, remove.unusual = FALSE,
+                                    up.flank = 1500, down.flank = 500, unique.prom = TRUE) 
+
+# Print the names of the elements in the GRangesList and show the class of the 'gene.parts' object. This confirms that the output is a GRangesList,
+# a list-like container where each element represents a different type of genomic feature (e.g., exon, intron).
+names(gene.parts)
+class(gene.parts)
+```
+
+## 6.3 Combine GRanges with gene.parts and find the overlap 
+
+### 6.3.1 Creation of an overview table with absolute numbers/percentage
+```
+# Annotate a GRanges object (genomic regions of interest) with gene parts (exon, intron, promoter, etc.).
+  newStickle_annot=annotateWithGeneParts(unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl, gene.parts, intersect.chr=TRUE)
+# Print the annotated GRanges object to review the annotations.
+  newStickle_annot
+
+# Below I calculate the annotation statistics in differnt ways with absolute numbers vs percentatges and with and without precedence.
+
+    # Obtain and print annotation statistics for the annotated genomic regions, considering the precedence of annotations.
+    # Precedence here means that if a region can be annotated as more than one type (e.g., both exon and intron)
+      genomation::getTargetAnnotationStats(newStickle_annot,precedence = TRUE)
+    # Obtain annotation statistics without considering precedence and without converting counts to percentages.
+      genomation::getTargetAnnotationStats(newStickle_annot, percentage =FALSE,precedence = TRUE)
+    # Obtain annotation statistics considering all possible annotations for each region (no precedence).
+      genomation::getTargetAnnotationStats(newStickle_annot, percentage =FALSE,precedence = FALSE)
+```
+### 6.3.2 a) Add genomic feature (exon, intron, promoter, etc.) to each CpG
+
+```
+# Annotate a GRanges object (genomic regions of interest) with gene parts (exon, intron, promoter, etc.).
+newStickle_annot_2=annotateWithGeneParts(unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl, gene.parts, intersect.chr=TRUE)
+
+## Combine genomic region annotations related to transcription start sites (TSS) with membership information 
+# regarding whether these regions overlap with promoters, exons, and introns. The getAssociationWithTSS function 
+# retrieves distance to the nearest TSS for each region, while getMembers indicates the type of genomic feature each 
+# region overlaps with.
+test = cbind(getAssociationWithTSS(newStickle_annot_2), as.data.frame(genomation::getMembers(newStickle_annot_2)))
+
+# Further extend the combined dataset by including genomic sequence names (chromosomes), ranges, and additional metadata 
+# for each region. The `@seqnames` property contains chromosome names for each region, `@ranges` provides genomic coordinates, 
+# and `@elementMetadata@listData` contains associated metadata.This step enriches the dataset with detailed location and feature
+# information.
+test = cbind(test,   unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@seqnames,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@ranges,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@elementMetadata@listData)
+  
+dim(test)#32925   233
+```
+### 6.3.2 b) Annotate the promoter-overlapping genomic regions 
+
+```  
+# Annotate the promoter-overlapping genomic regions with gene parts to identify their relation to gene structures.
+# This uses the 'annotateWithGeneParts' function which annotates regions based on their overlap with gene parts like exons, introns, etc.
+# only prom - check if cbind works -- here with another granges --->  unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters
+
+unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters=subsetByOverlaps(unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl,gene.parts$promoters)
+newStickle_annot_prom=annotateWithGeneParts(unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters, gene.parts, intersect.chr=TRUE)
+
+# Print the newly annotated GRanges object to inspect the annotations.
+newStickle_annot_prom
+
+# Combine the annotation data with additional metadata for a comprehensive dataset.
+# This includes distance to the nearest transcription start site (TSS), membership information (overlap with gene parts),
+# genomic sequence names (chromosomes), ranges, and other associated metadata. The resulting dataset provides a detailed view of each promoter-overlapping
+# region including its genomic context and annotations.
+
+test_prom = cbind(getAssociationWithTSS(newStickle_annot_prom), as.data.frame(genomation::getMembers(newStickle_annot_prom)))
+test_prom = cbind(test_prom,   unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters@seqnames,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters@ranges,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl_promoters@elementMetadata@listData)
+test_prom
+
+# This file 'newStickle_annot_prom.txt' will contain the detailed annotations and metadata of promoter-overlapping regions.
+write.csv(test_prom,file="2023/Annonation_2023/newStickle_annot_prom.txt")
+``` 
+### 6.3.2 c) Annotate the overlapping genomic to all genomic features and add a priority/precendene handling to it. 
+
+This section of the code applies a comprehensive annotation process to genomic regions, assigning them to specific gene parts such as promoters, exons, introns, and intragenic areas, while handling precedence among these categories to ensure accurate categorization. The process involves validation checks, creation of binary flags to mark the presence of these features, and the final assignment of each region to a CpG based on a set hierarchy of gene part importance. 
+
+```
+# Initial combination of annotation data with genomic region information
+test = cbind(getAssociationWithTSS(newStickle_annot_2), as.data.frame(genomation::getMembers(newStickle_annot_2)))
+test = cbind(test,   unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@seqnames,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@ranges,unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@elementMetadata@listData)
+
+# 1. Promoter Annotation Check
+# A new column 'prom_br' is created to flag regions as promoter based on existing annotations.
+# This is primarily a validation step to ensure that promoter annotations align with expectations.
+
+  test<- test%>% 
+    #  dplyr::select(prom,exon, intron, prom_br) %>% 
+    mutate(prom_br = case_when((prom == 1) ~ 1,
+                               (prom == 0 ) ~ 0,
+                               TRUE ~ 0))
+# Verifies if the newly created 'prom_br' column matches the original 'prom' annotations exactly.
+  identical(test[['prom_br']],test[['prom']]) #TRUE
+
+# Analyzes dimensions of the dataset under various conditions to understand the overlap and exclusivity of annotations.
+# These checks are crucial for confirming the integrity and expected behavior of the genomic annotations.
+  dim(test[test$prom==1 &test$exon==1 &test$intron==1,]) # promotor, exon and intron 2203  
+  dim(test[test$prom==1 &test$exon==0 &test$intron==0,]) # pure promotor, no exon, introm 41797 
+  dim(test[test$prom==1 &test$exon==1 &test$intron==0,]) # pure promotor and exon 40025
+  dim(test[test$prom==1 &test$exon==0 &test$intron==1,]) # pure promotor and intron 19516
+  2203+ 41797 + 40025 + 19516 #103541
+
+  dim(test[test$prom_br==1,])#pure promotor 103541
+
+# Sum of all promoter-related annotations matches expected total for 'prom_br'.
+
+
+# 2. Exon Annotation Check
+# A similar process is applied to exon annotations, creating an 'exon_br' flag to indicate pure exon regions.
+# The logic includes excluding regions already flagged as promoters to refine exon annotations.
+
+  test<- test%>% 
+    #  dplyr::select(prom,prom_br,exon, intron) %>%
+    mutate(exon_br = case_when((exon == 1) & (prom == 0 ) ~ 1,
+                               (prom == 1) & (exon == 1 )~ 0,
+                               (prom == 0 ) ~ 0,
+                               (intron == 0 ) ~ 0,
+                               TRUE ~ 0)) 
+  identical(test[['exon_br']],test[['exon']]) #FALSE
+
+# Unlike 'prom_br', 'exon_br' may not identically match 'exon' due to the exclusion of promoter-flagged regions.
+# Further validation checks are performed for exon annotations, ensuring accuracy.
+    # Regions overlapping with both exons and promoters are verified for correct assignment.
+    # The dimensions of pure exon and exon-intron regions are analyzed to confirm the accuracy of the 'exon_br' flag.
+    
+      test[test$exon==1 &test$prom==1,] 
+      # target.row dist.to.feature         feature.name feature.strand prom exon intron
+      # 8.29        149             296 ENSGACT00000005883.1              -    1    1      0
+      # 8.30        150             290 ENSGACT00000005883.1              -    1    1      0
+      # 8.32        152             134 ENSGACT00000005883.1              -    1    1      0
+
+      # exon_br
+      # 8.29       0
+      # 8.30       0
+      # 8.32       0
+    
+      #they are correctly assigned to promotor
+    
+      test[test$exon==1 &test$intron==1 &test$prom==0,] 
+      #target.row dist.to.feature         feature.name feature.strand prom exon intron
+      #6.5         97            1409 ENSGACT00000005856.1              -    0    1      1
+      #6.6         98            1378 ENSGACT00000005856.1              -    0    1      1
+      #6.7         99            1369 ENSGACT00000005856.1              -    0    1      1
+      #numCs87 numTs87 prom_br exon_br
+      #6.5      11       3       0       1
+      #6.6      13       1       0       1
+      #6.7      13       1       0       1
+      #they are correctly assigned to exon
+    
+      
+      dim(test[test$prom==0 &test$exon==1 &test$intron==0,]) #pure exon 88572
+      dim(test[test$prom==0 &test$exon==1 &test$intron==1,]) #pure exon and intron 2640
+      
+      88572+2640 #91212
+      dim(test[test$exon_br==1,])#pure exon 91212
+  
+# 3. Intron Annotation Check
+# Intron-specific annotations are validated by creating an 'intron_br' flag for pure intron regions,
+# excluding those already categorized as promoter or exon regions.
+
+    test<- test%>% 
+    dplyr::select(prom,prom_br,exon,exon_br, intron) %>%
+          mutate(intron_br = case_when(intron == 1 & (exon == 0) & (prom == 0 ) ~ 1,
+                                       (prom == 1) & (exon == 1 )~ 0,
+                                       (intron == 0 ) ~ 0,
+                                       TRUE ~ 0)) 
+    identical(test[['intron_br']],test[['intron']]) #FALSE
+# Analyzes the dimension for pure intron regions to ensure the 'intron_br' flag is accurately assigned. 
+    dim(test[test$prom==0 &test$exon==0 &test$intron==1,]) #pure intron 113842
+    dim(test[test$intron_br==1,])#pure intron 113842
+  
+  
+# 4. Intragenic Annotation
+# Identifies regions that do not overlap with any known gene parts (exons, introns, promoters) as 'intragenic'.
+# This step is important for understanding the genomic landscape outside of gene-encoding regions.
+ 
+    test<- test%>% 
+    dplyr::select(prom,prom_br,exon,exon_br, intron,intron_br) %>%
+    mutate(intragenic_br = case_when(intron == 0 & (exon == 0) & (prom == 0 ) ~ 1,
+                                     TRUE ~ 0)) 
+    dim(test[test$intragenic_br==1,])# pure intragenic 187040
+
+
+# Final Feature Categorization
+# Based on the prior annotations, a comprehensive 'feature' column is created to summarize the genomic region type.
+# This is crucial for easy visualization and analysis of the dataset's annotation composition.
+
+# Adding column based on other column:
+  test= test %>%
+    mutate(feature = case_when(
+      (prom_br == "1") ~ "promoter",
+      (exon_br == "1") ~ "exon",
+      (intron_br == "1")~ "intron",
+      (intragenic_br == "1")~ "intragenic",
+    ))
+  
+  test
+# The unique features and their summaries provide insights into the distribution of genomic regions across categories.
+  unique(factor(test$feature)) #exon intragenic intron promoter
+  summary(factor(test$feature))
+
+# The final annotated dataset is written to a CSV file, providing a valuable resource for further genomic analysis.
+  write.csv(test,file="2023/Annonation_2023/newStickle_annot_all_withpriority.txt")
+```
+This is the resulting table (first 5 lines).
+
+```
+"","target.row","dist.to.feature","feature.name","feature.strand","prom","exon","intron","unite_norm_87_10x_70_CT_GA_corr_without_Sex_grl@seqnames","start","end","width","coverage1","numCs1","numTs1","coverage2","numCs2","numTs2","coverage3","numCs3","numTs3","coverage4","numCs4","numTs4","coverage5","numCs5","numTs5","coverage6","numCs6","numTs6","coverage7","numCs7","numTs7","coverage8","numCs8","numTs8","coverage9","numCs9","numTs9","coverage10","numCs10","numTs10","coverage11","numCs11","numTs11","coverage12","numCs12","numTs12","coverage13","numCs13","numTs13","coverage14","numCs14","numTs14","coverage15","numCs15","numTs15","coverage16","numCs16","numTs16","coverage17","numCs17","numTs17","coverage18","numCs18","numTs18","coverage19","numCs19","numTs19","coverage20","numCs20","numTs20","coverage21","numCs21","numTs21","coverage22","numCs22","numTs22","coverage23","numCs23","numTs23","coverage24","numCs24","numTs24","coverage25","numCs25","numTs25","coverage26","numCs26","numTs26","coverage27","numCs27","numTs27","coverage28","numCs28","numTs28","coverage29","numCs29","numTs29","coverage30","numCs30","numTs30","coverage31","numCs31","numTs31","coverage32","numCs32","numTs32","coverage33","numCs33","numTs33","coverage34","numCs34","numTs34","coverage35","numCs35","numTs35","coverage36","numCs36","numTs36","coverage37","numCs37","numTs37","coverage38","numCs38","numTs38","coverage39","numCs39","numTs39","coverage40","numCs40","numTs40","coverage41","numCs41","numTs41","coverage42","numCs42","numTs42","coverage43","numCs43","numTs43","coverage44","numCs44","numTs44","coverage45","numCs45","numTs45","coverage46","numCs46","numTs46","coverage47","numCs47","numTs47","coverage48","numCs48","numTs48","coverage49","numCs49","numTs49","coverage50","numCs50","numTs50","coverage51","numCs51","numTs51","coverage52","numCs52","numTs52","coverage53","numCs53","numTs53","coverage54","numCs54","numTs54","coverage55","numCs55","numTs55","coverage56","numCs56","numTs56","coverage57","numCs57","numTs57","coverage58","numCs58","numTs58","coverage59","numCs59","numTs59","coverage60","numCs60","numTs60","coverage61","numCs61","numTs61","coverage62","numCs62","numTs62","coverage63","numCs63","numTs63","coverage64","numCs64","numTs64","coverage65","numCs65","numTs65","coverage66","numCs66","numTs66","coverage67","numCs67","numTs67","coverage68","numCs68","numTs68","coverage69","numCs69","numTs69","coverage70","numCs70","numTs70","coverage71","numCs71","numTs71","coverage72","numCs72","numTs72","coverage73","numCs73","numTs73","coverage74","numCs74","numTs74","coverage75","numCs75","numTs75","coverage76","numCs76","numTs76","coverage77","numCs77","numTs77","coverage78","numCs78","numTs78","coverage79","numCs79","numTs79","coverage80","numCs80","numTs80","coverage81","numCs81","numTs81","coverage82","numCs82","numTs82","coverage83","numCs83","numTs83","coverage84","numCs84","numTs84","coverage85","numCs85","numTs85","coverage86","numCs86","numTs86","coverage87","numCs87","numTs87","prom_br","exon_br","intron_br","intragenic_br","feature"
+"1",1,3987,"ENSGACT00000005823.1","-",0,1,0,"chrI",5924,5924,1,13,10,3,15,15,0,21,21,0,13,10,3,15,15,0,11,10,1,NA,NA,NA,NA,NA,NA,12,9,3,14,13,1,14,13,1,23,22,1,25,25,0,27,26,1,19,18,1,24,24,0,12,12,0,23,22,1,21,21,0,27,24,3,28,27,1,25,22,3,NA,NA,NA,15,14,1,18,16,2,24,24,0,20,19,1,22,21,1,24,23,1,21,21,0,10,9,1,24,24,0,17,14,3,16,16,0,37,34,3,46,42,4,26,26,0,13,13,0,16,16,0,17,13,4,28,28,0,19,19,0,16,16,0,23,20,3,15,15,0,11,11,0,16,15,1,NA,NA,NA,14,14,0,29,24,5,27,25,2,11,10,1,16,14,2,11,10,1,12,11,1,14,13,1,15,14,1,24,23,1,20,17,3,18,16,2,15,14,1,25,23,2,21,21,0,15,15,0,24,20,4,41,38,3,19,16,3,10,9,1,16,16,0,18,17,1,23,21,2,21,19,2,24,24,0,15,14,1,13,12,1,21,20,1,19,19,0,19,18,1,22,21,1,18,17,1,16,16,0,22,21,1,16,16,0,23,21,2,11,9,2,17,17,0,25,24,1,0,1,0,0,"exon"
+"1.1",2,3983,"ENSGACT00000005823.1","-",0,1,0,"chrI",5928,5928,1,13,11,2,16,15,1,22,19,3,12,9,3,15,13,2,12,12,0,NA,NA,NA,10,10,0,12,11,1,14,12,2,13,11,2,23,21,2,24,22,2,29,26,3,17,17,0,24,22,2,13,13,0,23,19,4,21,19,2,26,18,8,27,24,3,25,21,4,NA,NA,NA,15,14,1,18,18,0,24,24,0,20,16,4,22,19,3,25,21,4,21,19,2,10,9,1,24,22,2,17,15,2,16,16,0,35,33,2,45,40,5,24,20,4,13,12,1,16,15,1,17,11,6,28,26,2,17,16,1,15,15,0,23,22,1,16,16,0,12,12,0,16,15,1,NA,NA,NA,14,13,1,28,24,4,27,22,5,11,10,1,15,11,4,12,8,4,12,12,0,14,13,1,15,14,1,23,22,1,20,18,2,18,17,1,15,14,1,25,23,2,19,19,0,15,12,3,24,23,1,40,37,3,19,17,2,10,8,2,15,14,1,18,17,1,23,21,2,21,18,3,24,23,1,14,13,1,12,12,0,21,20,1,18,18,0,18,16,2,22,18,4,16,14,2,16,15,1,22,22,0,16,16,0,24,21,3,11,9,2,17,16,1,25,24,1,0,1,0,0,"exon"
+"1.2",3,3968,"ENSGACT00000005823.1","-",0,1,0,"chrI",5943,5943,1,13,9,4,16,13,3,22,17,5,13,12,1,15,13,2,12,12,0,NA,NA,NA,10,9,1,12,11,1,15,14,1,14,11,3,24,18,6,25,20,5,29,26,3,19,17,2,24,19,5,13,12,1,23,20,3,21,16,5,27,22,5,28,22,6,25,24,1,NA,NA,NA,15,14,1,18,18,0,24,22,2,20,17,3,22,16,6,25,20,5,21,15,6,10,9,1,24,24,0,17,15,2,16,13,3,36,32,4,46,39,7,26,21,5,13,10,3,16,14,2,17,12,5,28,25,3,19,18,1,16,13,3,23,19,4,16,15,1,12,11,1,16,13,3,NA,NA,NA,14,14,0,29,23,6,27,22,5,11,9,2,16,13,3,12,7,5,12,11,1,14,12,2,15,11,4,24,20,4,20,18,2,18,15,3,15,13,2,25,22,3,21,18,3,15,13,2,24,19,5,41,33,8,20,15,5,10,7,3,16,14,2,18,16,2,23,19,4,21,18,3,24,24,0,14,13,1,13,12,1,21,19,2,19,18,1,19,17,2,22,21,1,18,15,3,16,16,0,22,18,4,16,15,1,24,19,5,11,8,3,17,13,4,25,22,3,0,1,0,0,"exon"
+"1.3",4,3961,"ENSGACT00000005823.1","-",0,1,0,"chrI",5950,5950,1,13,10,3,16,14,2,22,17,5,13,11,2,15,11,4,12,11,1,NA,NA,NA,10,10,0,12,10,2,15,15,0,14,9,5,23,17,6,25,23,2,29,22,7,19,17,2,24,21,3,12,10,2,23,20,3,21,19,2,27,20,7,27,24,3,25,23,2,NA,NA,NA,15,15,0,18,15,3,24,14,10,20,16,4,20,12,8,25,21,4,20,17,3,10,7,3,24,20,4,17,14,3,16,15,1,36,29,7,46,34,12,26,20,6,13,12,1,16,14,2,16,12,4,28,23,5,18,16,2,15,13,2,23,18,5,16,14,2,11,9,2,16,12,4,NA,NA,NA,14,13,1,29,22,7,27,21,6,11,9,2,16,9,7,12,8,4,12,10,2,14,10,4,15,12,3,24,18,6,20,18,2,18,13,5,15,13,2,25,22,3,21,17,4,15,12,3,24,16,8,41,36,5,20,15,5,10,9,1,16,12,4,17,15,2,23,17,6,21,16,5,24,20,4,15,13,2,13,12,1,21,18,3,19,19,0,19,17,2,22,18,4,18,11,7,16,14,2,22,18,4,16,14,2,24,18,6,11,11,0,17,11,6,25,22,3,0,1,0,0,"exon"
+
+```
