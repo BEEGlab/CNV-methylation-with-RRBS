@@ -29,7 +29,7 @@ Licensed under the MIT License.
 
 ## Authors and Acknowledgments
 - Contributors: Chain and Meyer
-- 
+
 We express our gratitude for the financial support provided to the BAMBI project (grant agreement number: call 2012-76) by BONUS; the joint Baltic Sea research program, funded by the European Union; the Federal Ministry of Education and Research in Germany (to C.E. and T.B.H.R., reference number 03F0680A). The research conducted by B.S.M. received support from the Excellence Cluster “The Future Ocean” (EXC 80), and F.J.J.C. was supported by the National Science Foundation (grant number 2144259).
 
 ## Citations
