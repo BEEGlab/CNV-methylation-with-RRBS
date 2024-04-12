@@ -11,11 +11,14 @@ The scripts published here have been used in the manuscript **"Epigenetic divers
 
 
 ## Features
-- RRBS data preprocessing and cleaning.
-- Genome data processcing and cleaning
-- CNV identification and methylation assessment.
-- Statistical analysis for methylation comparison.
+- RRBS data preprocessing and cleaning [scripts](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/1.Summaryscript_RRBS_CNV.md).
+- Genome data processcing and cleaning [scripts](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/0.Summaryscript_WGS_CNV.md).
+- CNV identification [scripts](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/1.CNVs_IdentifyCandidatesBasedOnDepth.md) and [here](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/2a.CNVs_ManualModBasedOnDepth.md) and [more](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/2b.CNVs_ManualModBasedOnDepth_Genes.md) 
+- CNV and Vst [scripts](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/3.CNVs_Vst.md)
+- CNV and Methylation assessment [scripts](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/4.CNVs_Methylation_AllSites.md).
+- Statistical analysis for methylation comparison, [here](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/5.DMS.md).
 - Visualization of methylation patterns and CNV distribution.
+- Some metadata ([Samples96.out](https://github.com/BEEGlab/CNV-methylation-with-RRBS/blob/main/Samples96.out))
 
 
 
