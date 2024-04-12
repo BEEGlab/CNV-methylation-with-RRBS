@@ -1,4 +1,4 @@
-# CNV-methylation-with-RRBS
+# Bioinformatic scripts used in "Epigenetic diversity of genes with copy number variations among natural populations of the three-spined stickleback"
 
 ## Description
 
